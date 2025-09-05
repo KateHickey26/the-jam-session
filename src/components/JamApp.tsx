@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image"
 import React, { useEffect, useMemo, useState } from "react"
 import { v4 as uuidv4 } from "uuid"
 import { motion } from "framer-motion"
@@ -13,7 +14,23 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Copy, Dice1, Download, LinkIcon, Plus, Trash2, Upload, Users, Wand2 } from "lucide-react"
-import { JAM_SEEDS, type AlbumSeed } from "@/data/jamSeeds"
+import { ensureSession } from "@/lib/session"
+import {
+  fetchAlbums,
+  subscribeAlbums,
+  addAlbumRow,
+  deleteAlbumRow,
+  type DBAlbum,
+} from "@/lib/albums"
+import {
+  upsertVote,
+  deleteVote,
+  fetchMyVotes,
+  fetchStats,
+  subscribeVotes,
+  clearVotesForUserInSession,
+  type PreferenceValue,
+} from "@/lib/supabase"
 
 /**
  * The Jam App — lightweight shared album picker (client-only MVP)
@@ -81,6 +98,17 @@ function rankAlbumsByPreference(albums: Album[]) {
     const t = a.title.localeCompare(b.title)
     return t !== 0 ? t : a.artist.localeCompare(b.artist)
   })
+}
+
+function dbToAlbum(row: DBAlbum): Album {
+  return {
+    id: row.id,
+    title: row.title,
+    artist: row.artist,
+    cover: row.cover ?? undefined,
+    votes: {}, // until votes are in the backend
+    createdAt: new Date(row.created_at).getTime(),
+  }
 }
 
 function myVoteColorClasses(my?: number) {
@@ -179,11 +207,6 @@ function suggestClose(input: string, candidates: string[], maxDistance = 2) {
   return scored.filter(x => x.d <= maxDistance).slice(0, 5).map(x => x.c)
 }
 
-// 1 = "I want to listen to this" (weight 5)
-// 2 = "I could listen to this"   (weight 3)
-// 3 = "I don't want this week"   (exclude — unless everything is excluded)
-type PreferenceValue = 1 | 2 | 3
-
 function hasBlock(votes: VoteMap): boolean {
   return Object.values(votes).some(v => v === 3)
 }
@@ -227,6 +250,7 @@ function weightedPick(pool: (Album & { __weight: number })[], tickets: number): 
 // ---- Main Component ----
 export default function JamApp() {
   const [session, setSession] = useState<string>(() => new URLSearchParams(location.search).get("session") || "demo session")
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const [albums, setAlbums] = useState<Album[]>(() => loadSession(session))
   const [newAlbumTitle, setNewAlbumTitle] = useState("")
   const [newAlbumArtist, setNewAlbumArtist] = useState("")
@@ -248,6 +272,56 @@ export default function JamApp() {
   })
   // computed ranks
   const ranked = useMemo(() => rankAlbumsByPreference(albums), [albums])
+  // my vote per album (albumId -> 1|2|3)
+  const [myVotes, setMyVotes] = useState<Record<string, PreferenceValue | undefined>>({})
+  // group stats per album (albumId -> counts)
+  const [stats, setStats] = useState<Record<string, { c1: number; c2: number; c3: number }>>({})
+
+  useEffect(() => {
+    let unsubAlbums: (() => void) | null = null
+    let unsubVotes: (() => void) | null = null
+    let alive = true
+  
+    ;(async () => {
+      const id = await ensureSession(session)
+      if (!alive) return
+      setSessionId(id)
+  
+      // initial albums
+      const rows = await fetchAlbums(id)
+      if (!alive) return
+      setAlbums(rows.map(dbToAlbum))
+  
+      // initial my votes + stats
+      // initial my votes + stats
+      const [mv, st] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
+      if (!alive) return
+      setMyVotes(mv)
+      setStats(st)
+  
+      // realtime: albums table (insert/delete)
+      unsubAlbums = subscribeAlbums(id, async () => {
+        const latest = await fetchAlbums(id)
+        if (!alive) return
+        setAlbums(latest.map(dbToAlbum))
+      })
+  
+      // realtime: votes table (any change → refresh myVotes + stats)
+      unsubVotes = subscribeVotes(async () => {
+        const [mv2, st2] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
+        if (!alive) return
+        setMyVotes(mv2)
+        setStats(st2)
+      })
+    })()
+  
+    return () => {
+      alive = false
+      if (unsubAlbums) unsubAlbums()
+      if (unsubVotes) unsubVotes()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, userId])
 
   // update suggestions as user types to add an album
   useEffect(() => {
@@ -285,67 +359,108 @@ export default function JamApp() {
     setAlbums(loadSession(session))
   }, [session])
 
-  function addAlbum() {
+  async function addAlbum() {
     const t = newAlbumTitle.trim()
     const a = newAlbumArtist.trim()
+    const c = cover.trim()
     if (!t || !a) return
+    if (!sessionId) {
+      alert("Session not ready yet. Try again in a moment.")
+      return
+    }
   
-    // normalised key (case-insensitive)
+    // exact duplicate check (case-insensitive)
     const key = `${t.toLowerCase()}::${a.toLowerCase()}`
-    const existsExact = albums.some(al => `${al.title.toLowerCase()}::${al.artist.toLowerCase()}` === key)
+    const existsExact = albums.some(
+      (al) => `${al.title.toLowerCase()}::${al.artist.toLowerCase()}` === key
+    )
     if (existsExact) {
       alert("That album is already on the list!")
       return
     }
-
-    // soft-block near duplicates
-    const nearTitle = suggestClose(t, albums.map(x => x.title))[0]
-    const nearArtist = suggestClose(a, albums.map(x => x.artist))[0]
+  
+    // soft near-duplicate nudge (optional)
+    const nearTitle = suggestClose(t, albums.map((x) => x.title))[0]
+    const nearArtist = suggestClose(a, albums.map((x) => x.artist))[0]
     if (nearTitle && nearArtist) {
       const proceed = confirm(`Looks close to “${nearTitle} — ${nearArtist}”. Add anyway?`)
       if (!proceed) return
     }
   
-    const newAlbum: Album = {
-      id: uuidv4(),
-      title: t,
-      artist: a,
-      cover: cover.trim() || undefined,
-      votes: {},
-      createdAt: Date.now(),
+    try {
+      // write to Supabase; realtime subscription will refresh the list
+      await addAlbumRow(sessionId, t, a, c || undefined)
+  
+      // clear inputs
+      setNewAlbumTitle("")
+      setNewAlbumArtist("")
+      setCover("")
+    } catch (err) {
+      console.error(err)
+      alert("Could not add album. Please try again.")
     }
-    setAlbums(prev => [newAlbum, ...prev])
-    setNewAlbumTitle("")
-    setNewAlbumArtist("")
-    setCover("")
   }
 
-  function removeAlbum(id: string) {
-    setAlbums((prev) => prev.filter((x) => x.id !== id))
+  async function removeAlbum(id: string) {
+    try {
+      await deleteAlbumRow(id)
+      // No local setState; realtime listener will update the list
+    } catch (err) {
+      console.error(err)
+      alert("Could not remove album. Please try again.")
+    }
   }
 
-  function clearMyVotes() {
-    setAlbums((prev) => prev.map((al) => {
-      const { [userId]: _, ...rest } = al.votes
-      return { ...al, votes: rest }
-    }))
+  async function clearMyVotes() {
+    if (!sessionId) return
+    try {
+      await clearVotesForUserInSession(sessionId, userId)
+      // myVotes will refresh via the votes subscription; no local setState needed
+    } catch (err) {
+      console.error(err)
+      alert("Could not clear your votes.")
+    }
   }
 
-function pickByRules() {
-  // Build pool excluding any album with a rank-3 from anyone.
-  const { eligible, totalTickets } = buildChoicePool(albums)
-
-  if (eligible.length === 0) {
-    // Fallback: every album has at least one 3 → pick any album purely at random
-    if (albums.length === 0) return
-    const choice = albums[Math.floor(Math.random() * albums.length)]
-    setPicked(choice)
-    return
+  function hasBlockFromStats(s?: { c1: number; c2: number; c3: number }) {
+    return !!s && s.c3 > 0
+  }
+  
+  function weightFromStats(s?: { c1: number; c2: number; c3: number }) {
+    if (!s) return 1
+    if (s.c3 > 0) return 0 // excluded unless everything is blocked
+    const w = s.c1 * 5 + s.c2 * 3
+    return w > 0 ? w : 1 // unvoted -> minimal weight 1
   }
 
-  const choice = weightedPick(eligible, totalTickets)
-  setPicked(choice)
-}
+  function pickByRules() {
+    // Build pool from stats: exclude any album with count_3 > 0
+    const pool = albums
+      .map(a => {
+        const s = stats[a.id]
+        return { album: a, weight: weightFromStats(s), blocked: hasBlockFromStats(s) }
+      })
+      .filter(x => !x.blocked)
+  
+    if (pool.length === 0) {
+      // everyone blocked everything -> pure random from all albums
+      if (albums.length === 0) return
+      const choice = albums[Math.floor(Math.random() * albums.length)]
+      setPicked(choice)
+      return
+    }
+  
+    const totalTickets = pool.reduce((acc, x) => acc + x.weight, 0)
+    let r = Math.floor(Math.random() * totalTickets) + 1
+    for (const x of pool) {
+      r -= x.weight
+      if (r <= 0) {
+        setPicked(x.album)
+        return
+      }
+    }
+    setPicked(pool[pool.length - 1].album) // safety
+  }
 
   function exportJson() {
     download(`${session}-albums.json`, JSON.stringify({ session, albums }, null, 2))
@@ -375,7 +490,14 @@ function pickByRules() {
       <div className="mx-auto max-w-6xl">
         <motion.header initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">The Jam Session</h1>
+            {/* <h1 className="text-3xl font-bold tracking-tight">The Jam Session</h1> */}
+            <Image 
+              src="/jam-session-logo-sbs-transparent.png" 
+              alt="The Jam Session logo" 
+              width={320}   // tweak size as needed
+              height={80} 
+              priority
+            />
             <p className="text-sm text-muted-foreground">Vote on your Jams, then let chance decide from the top picks.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -530,7 +652,7 @@ function pickByRules() {
             {/* Albums tab */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {albums.map((al) => {
-                const my = al.votes[userId]
+                const my = myVotes[al.id]
                 const colors = myVoteColorClasses(my)
                 return (
                   <motion.div key={al.id} layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
@@ -558,6 +680,7 @@ function pickByRules() {
                           <div className="mt-1 text-xs">
                             <span className="text-muted-foreground">Your vote: </span>
                             <span className={`font-medium ${colors.badge}`}>
+                              {/* driven by myVotes */}
                               {typeof my === "number" ? PREFERENCE.find(p => p.value === my)?.label : "—"}
                             </span>
                           </div>
@@ -573,13 +696,13 @@ function pickByRules() {
                               type="button"
                               variant={my === p.value ? "default" : "outline"}
                               className={my === p.value ? "" : "bg-white"}
-                              onClick={() =>
-                                setAlbums(prev =>
-                                  prev.map(x =>
-                                    x.id === al.id ? { ...x, votes: { ...x.votes, [userId]: p.value } } : x
-                                  )
-                                )
-                              }
+                              onClick={async () => {
+                                try {
+                                  await upsertVote(al.id, userId, p.value)
+                                } catch (err) {
+                                  alert("Could not save your vote.")
+                                }
+                              }}
                               title={p.label}
                             >
                               <span className="mr-1">{p.dot}</span> {p.value}
@@ -590,15 +713,13 @@ function pickByRules() {
                           {typeof my === "number" && (
                             <Button
                               variant="ghost"
-                              onClick={() =>
-                                setAlbums(prev =>
-                                  prev.map(x => {
-                                    if (x.id !== al.id) return x
-                                    const { [userId]: _, ...rest } = x.votes
-                                    return { ...x, votes: rest }
-                                  })
-                                )
-                              }
+                              onClick={async () => {
+                                try {
+                                  await deleteVote(al.id, userId)
+                                } catch (err) {
+                                  alert("Could not clear your vote.")
+                                }
+                              }}
                             >
                               Clear
                             </Button>

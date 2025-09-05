@@ -1,0 +1,45 @@
+import { supabase } from "./supabase"
+
+export type DBAlbum = {
+  id: string
+  session_id: string
+  title: string
+  artist: string
+  cover: string | null
+  created_at: string // timestamp as ISO string
+}
+
+export async function fetchAlbums(sessionId: string): Promise<DBAlbum[]> {
+  const { data, error } = await supabase
+    .from("albums")
+    .select("*")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: false })
+  if (error) throw error
+  return data as DBAlbum[]
+}
+
+export function subscribeAlbums(sessionId: string, onChange: () => void): () => void {
+  const channel = supabase
+    .channel(`albums-${sessionId}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "albums", filter: `session_id=eq.${sessionId}` },
+      () => onChange()
+    )
+    .subscribe()
+
+  return () => supabase.removeChannel(channel)
+}
+
+export async function addAlbumRow(sessionId: string, title: string, artist: string, cover?: string) {
+  const { error } = await supabase
+    .from("albums")
+    .insert({ session_id: sessionId, title, artist, cover: cover ?? null })
+  if (error) throw error
+}
+
+export async function deleteAlbumRow(id: string) {
+  const { error } = await supabase.from("albums").delete().eq("id", id)
+  if (error) throw error
+}
