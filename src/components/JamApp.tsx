@@ -32,73 +32,21 @@ import {
   type PreferenceValue,
 } from "@/lib/supabase"
 
-/**
- * The Jam App — lightweight shared album picker (client-only MVP)
- * -------------------------------------------------------------
- * Features
- * - Create a local "session" (by name) so you and a friend can use the same list.
- * - Add albums (title, artist, optional cover URL).
- * - Each participant sets their name and casts a 0–10 vote per album.
- * - Sorts by average score; shows per-user votes.
- * - Pick from top ranked albums
- * - Import/Export JSON for quick sharing between devices (no backend yet).
- * - LocalStorage persistence keyed by session name.
- *
- * Nice-to-haves queued for later (easy backend swap):
- * - Realtime sync via Supabase Realtime or Firebase.
- * - Spotify/Apple Music lookups to auto-fill album art & metadata.
- * - Weighted random draw (roulette) by score rather than uniform.
- * - Comments per album and simple chat.
- */
-
 // ---- Types ----
-export type VoteMap = Record<string, number | undefined> // key: userId
 export type Album = {
   id: string
   title: string
   artist: string
   cover?: string
-  votes: VoteMap
   createdAt: number
 }
 
-// ---- Helpers ----
-const STORAGE_KEY = (session: string) => `the-jam-session/${session}`
-
-// 1 = most wanted ... 4 = least wanted
+// 1 = most wanted ... 3 = not this week
 export const PREFERENCE = [
   { value: 1, label: "I'm dying to listen to this", dot: "💙", bg: "bg-jam-blueberry/10",  ring: "ring-jam-blueberry/40",  text: "text-jam-blueberry" },
-  // { value: 2, label: "I would like to listen to this",  dot: "❤️",  bg: "bg-jam-strawberry/10", ring: "ring-jam-strawberry/40", text: "text-jam-strawberry" },
-  { value: 2, label: "I could listen to this this week",         dot: "🍊", bg: "bg-jam-apricot/10",    ring: "ring-jam-apricot/40",    text: "text-jam-apricot" },
-  { value: 3, label: "I don't fancy this this week",    dot: "😶", bg: "bg-zinc-100",         ring: "ring-zinc-300",          text: "text-zinc-500" },
+  { value: 2, label: "I could listen to this this week", dot: "🍊", bg: "bg-jam-apricot/10", ring: "ring-jam-apricot/40", text: "text-jam-apricot" },
+  { value: 3, label: "I don't fancy this this week", dot: "😶", bg: "bg-zinc-100", ring: "ring-zinc-300", text: "text-zinc-500" },
 ] as const
-
-function preferenceAverage(votes: VoteMap): number | null {
-  const vals = Object.values(votes).filter((v): v is number => typeof v === "number")
-  if (!vals.length) return null
-  const sum = vals.reduce((a, b) => a + b, 0)
-  return +(sum / vals.length) // lower is better
-}
-
-// sort by ascending average (1 is best). Untouched albums (null) go last.
-// tie-break on createdAt (earlier first).
-function rankAlbumsByPreference(albums: Album[]) {
-  return [...albums].sort((a, b) => {
-    const aa = preferenceAverage(a.votes)
-    const bb = preferenceAverage(b.votes)
-    if (aa === null && bb === null) {
-      // neither has votes → alphabetical by title, then artist
-      const t = a.title.localeCompare(b.title)
-      return t !== 0 ? t : a.artist.localeCompare(b.artist)
-    }
-    if (aa === null) return 1
-    if (bb === null) return -1
-    if (aa !== bb) return aa - bb
-    // tie-breaker: alphabetical by title, then artist
-    const t = a.title.localeCompare(b.title)
-    return t !== 0 ? t : a.artist.localeCompare(b.artist)
-  })
-}
 
 function dbToAlbum(row: DBAlbum): Album {
   return {
@@ -106,7 +54,6 @@ function dbToAlbum(row: DBAlbum): Album {
     title: row.title,
     artist: row.artist,
     cover: row.cover ?? undefined,
-    votes: {}, // until votes are in the backend
     createdAt: new Date(row.created_at).getTime(),
   }
 }
@@ -118,23 +65,6 @@ function myVoteColorClasses(my?: number) {
   return {
     card: `${opt.bg} ring-1 ${opt.ring}`,
     badge: `${opt.text}`,
-  }
-}
-
-function loadSession(session: string): Album[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY(session))
-    return raw ? (JSON.parse(raw) as Album[]) : []
-  } catch {
-    return []
-  }
-}
-
-function saveSession(session: string, albums: Album[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY(session), JSON.stringify(albums))
-  } catch {
-    // no-op
   }
 }
 
@@ -152,23 +82,11 @@ function copyToClipboard(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
 }
 
-function seedsToAlbums(seeds: AlbumSeed[]): Album[] {
-  const now = Date.now()
-  return seeds.map((s, i) => ({
-    id: uuidv4(),
-    title: s.title.trim(),
-    artist: s.artist.trim(),
-    cover: s.cover?.trim() || undefined,
-    votes: {},
-    createdAt: now + i, // preserve seed order
-  }))
-}
-
 function norm(s: string) {
   return s.trim().toLowerCase().replace(/\s+/g, " ")
 }
 
-// Tiny Levenshtein (good enough for short names)
+// Tiny Levenshtein (for suggestions)
 function levenshtein(a: string, b: string): number {
   const m = a.length, n = b.length
   if (m === 0) return n
@@ -180,25 +98,23 @@ function levenshtein(a: string, b: string): number {
     for (let j = 1; j <= n; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1
       dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,      // delete
-        dp[i][j - 1] + 1,      // insert
-        dp[i - 1][j - 1] + cost // replace
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
       )
     }
   }
   return dp[m][n]
 }
 
-// Build unique candidate lists from current albums + seeds
-function buildCandidates(albums: Album[], seeds: { title: string; artist: string }[]) {
+// Build unique candidate lists from current albums
+function buildCandidates(albums: Album[]) {
   const titles = new Set<string>()
   const artists = new Set<string>()
   for (const a of albums) { titles.add(a.title); artists.add(a.artist) }
-  for (const s of seeds)  { titles.add(s.title); artists.add(s.artist) }
   return { titles: Array.from(titles), artists: Array.from(artists) }
 }
 
-// Suggest close matches (distance <= 2 by default)
 function suggestClose(input: string, candidates: string[], maxDistance = 2) {
   const inp = norm(input)
   if (!inp) return []
@@ -207,51 +123,27 @@ function suggestClose(input: string, candidates: string[], maxDistance = 2) {
   return scored.filter(x => x.d <= maxDistance).slice(0, 5).map(x => x.c)
 }
 
-function hasBlock(votes: VoteMap): boolean {
-  return Object.values(votes).some(v => v === 3)
-}
-
-function weightFromVotes(votes: VoteMap): number {
-  let weight = 0
-  for (const v of Object.values(votes)) {
-    if (v === 1) weight += 5
-    else if (v === 2) weight += 3
-    // v === 3 handled by hasBlock (exclusion)
-  }
-  // No votes (and not blocked) → minimal weight 1
-  return weight > 0 ? weight : 1
-}
-
-function buildChoicePool(albums: Album[]): {
-  eligible: (Album & { __weight: number })[],
-  totalTickets: number
-} {
-  const eligible: (Album & { __weight: number })[] = []
-
-  for (const a of albums) {
-    if (hasBlock(a.votes)) continue
-    const w = weightFromVotes(a.votes)
-    eligible.push({ ...a, __weight: w } as Album & { __weight: number })
-  }
-
-  const totalTickets = eligible.reduce((acc, a) => acc + a.__weight, 0)
-  return { eligible, totalTickets }
-}
-
-function weightedPick(pool: (Album & { __weight: number })[], tickets: number): Album {
-  let r = Math.floor(Math.random() * tickets) + 1
-  for (const a of pool) {
-    r -= a.__weight
-    if (r <= 0) return a
-  }
-  return pool[pool.length - 1] // safety
+// sorting based on users votes
+function rankAlbumsByMyVote(
+  albums: Album[],
+  myVotes: Record<string, PreferenceValue | undefined>
+) {
+  // Order: 1 (yes) → 2 (could) → 3 (no) → unvoted
+  return [...albums].sort((a, b) => {
+    const va = myVotes[a.id] ?? 99
+    const vb = myVotes[b.id] ?? 99
+    if (va !== vb) return va - vb
+    // tie-breaker: alphabetical
+    const t = a.title.localeCompare(b.title)
+    return t !== 0 ? t : a.artist.localeCompare(b.artist)
+  })
 }
 
 // ---- Main Component ----
 export default function JamApp() {
   const [session, setSession] = useState<string>(() => new URLSearchParams(location.search).get("session") || "demo session")
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [albums, setAlbums] = useState<Album[]>(() => loadSession(session))
+  const [albums, setAlbums] = useState<Album[]>([])
   const [newAlbumTitle, setNewAlbumTitle] = useState("")
   const [newAlbumArtist, setNewAlbumArtist] = useState("")
   const [cover, setCover] = useState("")
@@ -261,17 +153,17 @@ export default function JamApp() {
   const artistListId = "jam-artist-list"
   const [userName, setUserName] = useState<string>(() => localStorage.getItem("the-jam-session/userName") || "")
   const [picked, setPicked] = useState<Album | null>(null)
+
   // user identity (ephemeral; not stored server-side)
   const [userId] = useState<string>(() => {
     const k = "the-jam-session/userId"
     const cached = localStorage.getItem(k)
     if (cached) return cached
-      const id = uuidv4()
-      localStorage.setItem(k, id)
-      return id
+    const id = uuidv4()
+    localStorage.setItem(k, id)
+    return id
   })
-  // computed ranks
-  const ranked = useMemo(() => rankAlbumsByPreference(albums), [albums])
+
   // my vote per album (albumId -> 1|2|3)
   const [myVotes, setMyVotes] = useState<Record<string, PreferenceValue | undefined>>({})
   // group stats per album (albumId -> counts)
@@ -281,31 +173,30 @@ export default function JamApp() {
     let unsubAlbums: (() => void) | null = null
     let unsubVotes: (() => void) | null = null
     let alive = true
-  
+
     ;(async () => {
       const id = await ensureSession(session)
       if (!alive) return
       setSessionId(id)
-  
+
       // initial albums
       const rows = await fetchAlbums(id)
       if (!alive) return
       setAlbums(rows.map(dbToAlbum))
-  
-      // initial my votes + stats
+
       // initial my votes + stats
       const [mv, st] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
       if (!alive) return
       setMyVotes(mv)
       setStats(st)
-  
+
       // realtime: albums table (insert/delete)
       unsubAlbums = subscribeAlbums(id, async () => {
         const latest = await fetchAlbums(id)
         if (!alive) return
         setAlbums(latest.map(dbToAlbum))
       })
-  
+
       // realtime: votes table (any change → refresh myVotes + stats)
       unsubVotes = subscribeVotes(async () => {
         const [mv2, st2] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
@@ -314,7 +205,7 @@ export default function JamApp() {
         setStats(st2)
       })
     })()
-  
+
     return () => {
       alive = false
       if (unsubAlbums) unsubAlbums()
@@ -323,41 +214,12 @@ export default function JamApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, userId])
 
-  // update suggestions as user types to add an album
+  // update suggestions as user types to add an album (from current albums only)
   useEffect(() => {
-    const { titles, artists } = buildCandidates(albums, JAM_SEEDS)
+    const { titles, artists } = buildCandidates(albums)
     setTitleSuggestions(suggestClose(newAlbumTitle, titles))
     setArtistSuggestions(suggestClose(newAlbumArtist, artists))
   }, [newAlbumTitle, newAlbumArtist, albums])
-
-  // mark seeds loaded per session so we don't repeat
-  function seedFlag(session: string) {
-    return `the-jam-session/${session}/seeded`
-  }
-
-  useEffect(() => {
-    const alreadySeeded = localStorage.getItem(seedFlag(session)) === "1"
-    if (!alreadySeeded && albums.length === 0) {
-      const seeded = seedsToAlbums(JAM_SEEDS)
-      setAlbums(seeded)
-      localStorage.setItem(seedFlag(session), "1")
-    }
-    // run only on first render for this session state
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // persist on changes
-  useEffect(() => {
-    saveSession(session, albums)
-  }, [session, albums])
-
-  // switch session
-  useEffect(() => {
-    const params = new URLSearchParams(location.search)
-    params.set("session", session)
-    history.replaceState(null, "", `${location.pathname}?${params.toString()}`)
-    setAlbums(loadSession(session))
-  }, [session])
 
   async function addAlbum() {
     const t = newAlbumTitle.trim()
@@ -368,7 +230,7 @@ export default function JamApp() {
       alert("Session not ready yet. Try again in a moment.")
       return
     }
-  
+
     // exact duplicate check (case-insensitive)
     const key = `${t.toLowerCase()}::${a.toLowerCase()}`
     const existsExact = albums.some(
@@ -378,7 +240,7 @@ export default function JamApp() {
       alert("That album is already on the list!")
       return
     }
-  
+
     // soft near-duplicate nudge (optional)
     const nearTitle = suggestClose(t, albums.map((x) => x.title))[0]
     const nearArtist = suggestClose(a, albums.map((x) => x.artist))[0]
@@ -386,12 +248,9 @@ export default function JamApp() {
       const proceed = confirm(`Looks close to “${nearTitle} — ${nearArtist}”. Add anyway?`)
       if (!proceed) return
     }
-  
+
     try {
-      // write to Supabase; realtime subscription will refresh the list
       await addAlbumRow(sessionId, t, a, c || undefined)
-  
-      // clear inputs
       setNewAlbumTitle("")
       setNewAlbumArtist("")
       setCover("")
@@ -404,7 +263,6 @@ export default function JamApp() {
   async function removeAlbum(id: string) {
     try {
       await deleteAlbumRow(id)
-      // No local setState; realtime listener will update the list
     } catch (err) {
       console.error(err)
       alert("Could not remove album. Please try again.")
@@ -415,7 +273,7 @@ export default function JamApp() {
     if (!sessionId) return
     try {
       await clearVotesForUserInSession(sessionId, userId)
-      // myVotes will refresh via the votes subscription; no local setState needed
+      // will refresh via realtime
     } catch (err) {
       console.error(err)
       alert("Could not clear your votes.")
@@ -425,31 +283,29 @@ export default function JamApp() {
   function hasBlockFromStats(s?: { c1: number; c2: number; c3: number }) {
     return !!s && s.c3 > 0
   }
-  
+
   function weightFromStats(s?: { c1: number; c2: number; c3: number }) {
     if (!s) return 1
-    if (s.c3 > 0) return 0 // excluded unless everything is blocked
+    if (s.c3 > 0) return 0
     const w = s.c1 * 5 + s.c2 * 3
-    return w > 0 ? w : 1 // unvoted -> minimal weight 1
+    return w > 0 ? w : 1
   }
 
   function pickByRules() {
-    // Build pool from stats: exclude any album with count_3 > 0
     const pool = albums
       .map(a => {
         const s = stats[a.id]
         return { album: a, weight: weightFromStats(s), blocked: hasBlockFromStats(s) }
       })
       .filter(x => !x.blocked)
-  
+
     if (pool.length === 0) {
-      // everyone blocked everything -> pure random from all albums
       if (albums.length === 0) return
       const choice = albums[Math.floor(Math.random() * albums.length)]
       setPicked(choice)
       return
     }
-  
+
     const totalTickets = pool.reduce((acc, x) => acc + x.weight, 0)
     let r = Math.floor(Math.random() * totalTickets) + 1
     for (const x of pool) {
@@ -459,7 +315,7 @@ export default function JamApp() {
         return
       }
     }
-    setPicked(pool[pool.length - 1].album) // safety
+    setPicked(pool[pool.length - 1].album)
   }
 
   function exportJson() {
@@ -467,13 +323,15 @@ export default function JamApp() {
   }
 
   function importJson(text: string) {
+    // NOTE: this now only changes local UI state; the source of truth is Supabase.
+    // We can wire this to bulk-insert later if you want.
     try {
       const parsed = JSON.parse(text)
       if (Array.isArray(parsed.albums)) {
         setAlbums(parsed.albums as Album[])
       }
     } catch {
-      // ignore parse errors in MVP
+      // ignore for MVP
     }
   }
 
@@ -490,12 +348,11 @@ export default function JamApp() {
       <div className="mx-auto max-w-6xl">
         <motion.header initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
-            {/* <h1 className="text-3xl font-bold tracking-tight">The Jam Session</h1> */}
             <Image 
               src="/jam-session-logo-sbs-transparent.png" 
               alt="The Jam Session logo" 
-              width={320}   // tweak size as needed
-              height={80} 
+              width={320}
+              height={80}
               priority
             />
             <p className="text-sm text-muted-foreground">Vote on your Jams, then let chance decide from the top picks.</p>
@@ -509,7 +366,7 @@ export default function JamApp() {
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Import JSON</DialogTitle>
+                  <DialogTitle>Import JSON (local preview only)</DialogTitle>
                 </DialogHeader>
                 <Textarea placeholder="Paste JSON here" className="min-h-[160px]" onChange={(e) => importJson(e.target.value)} />
               </DialogContent>
@@ -572,13 +429,14 @@ export default function JamApp() {
                   onChange={(e) => setCover(e.target.value)} 
                 />
                 <Button onClick={addAlbum}><Plus className="mr-2 h-4 w-4"/>Add</Button>
-              </div>
-              <datalist id={titleListId}>
+
+                <datalist id={titleListId}>
                   {titleSuggestions.map(s => <option key={s} value={s} />)}
                 </datalist>
                 <datalist id={artistListId}>
                   {artistSuggestions.map(s => <option key={s} value={s} />)}
                 </datalist>
+              </div>
             </CardContent>
           </Card>
 
@@ -602,21 +460,7 @@ export default function JamApp() {
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel>Share</DropdownMenuLabel>
                     <DropdownMenuItem onClick={() => copyToClipboard(shareUrl())}><Copy className="mr-2 h-4 w-4"/>Copy link</DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setAlbums(prev => {
-                          const existing = new Set(
-                            prev.map(a => `${a.title.toLowerCase()}::${a.artist.toLowerCase()}`)
-                          )
-                          const fresh = JAM_SEEDS.filter(
-                            s => !existing.has(`${s.title.toLowerCase()}::${s.artist.toLowerCase()}`)
-                          )
-                          return [...seedsToAlbums(fresh), ...prev]
-                        })
-                      }}
-                    >
-                      Load starter list
-                    </DropdownMenuItem>
+                    {/* Starter list removed (we're Supabase-first now) */}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -633,23 +477,24 @@ export default function JamApp() {
 
           <TabsContent value="list" className="mt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              {/* Rank albums button */}
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" onClick={() => setAlbums(prev => rankAlbumsByPreference(prev))}>
-                    Sort into order
-                  </Button>
-                  <Button variant="secondary" onClick={pickByRules}>
-                    <Dice1 className="mr-2 h-4 w-4" /> Spread the Pick
-                  </Button>
-                  <Button variant="ghost" onClick={() => setAlbums(prev => [...prev].sort((a,b) => a.createdAt - b.createdAt))}>
-                    Reset order
-                  </Button>
-                </div>
+              <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setAlbums(prev => rankAlbumsByMyVote(prev, myVotes))}
+              >
+                Sort jams
+              </Button>
+                <Button variant="secondary" onClick={pickByRules}>
+                  <Dice1 className="mr-2 h-4 w-4" /> Spread the Pick
+                </Button>
+                <Button variant="ghost" onClick={() => setAlbums([...albums].sort((a,b) => a.createdAt - b.createdAt))}>
+                  Reset order
+                </Button>
               </div>
+            </div>
 
             <Separator className="mb-4"/>
             
-            {/* Albums tab */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {albums.map((al) => {
                 const my = myVotes[al.id]
@@ -676,11 +521,9 @@ export default function JamApp() {
                             </Button>
                           </div>
 
-                          {/* Your vote label */}
                           <div className="mt-1 text-xs">
                             <span className="text-muted-foreground">Your vote: </span>
                             <span className={`font-medium ${colors.badge}`}>
-                              {/* driven by myVotes */}
                               {typeof my === "number" ? PREFERENCE.find(p => p.value === my)?.label : "—"}
                             </span>
                           </div>
@@ -688,7 +531,6 @@ export default function JamApp() {
                       </div>
 
                       <CardContent>
-                        {/* Preference buttons */}
                         <div className="flex flex-wrap gap-2">
                           {PREFERENCE.map(p => (
                             <Button
@@ -699,7 +541,7 @@ export default function JamApp() {
                               onClick={async () => {
                                 try {
                                   await upsertVote(al.id, userId, p.value)
-                                } catch (err) {
+                                } catch {
                                   alert("Could not save your vote.")
                                 }
                               }}
@@ -709,14 +551,13 @@ export default function JamApp() {
                             </Button>
                           ))}
 
-                          {/* Clear my vote */}
                           {typeof my === "number" && (
                             <Button
                               variant="ghost"
                               onClick={async () => {
                                 try {
                                   await deleteVote(al.id, userId)
-                                } catch (err) {
+                                } catch {
                                   alert("Could not clear your vote.")
                                 }
                               }}
@@ -725,13 +566,6 @@ export default function JamApp() {
                             </Button>
                           )}
                         </div>
-
-                     {/*<div className="mt-3 text-xs text-muted-foreground">
-                          {typeof my === "number"
-                            ? `You voted: ${PREFERENCE.find(p => p.value === my)?.label}`
-                            : "You haven’t voted yet"}
-                        </div> */}
-
                       </CardContent>
                     </Card>
                   </motion.div>
@@ -747,9 +581,9 @@ export default function JamApp() {
               </CardHeader>
               <CardContent>
                 <div className="mb-4 flex flex-wrap items-center gap-3">
-                <Button onClick={pickByRules}>
-                  <Dice1 className="mr-2 h-4 w-4" /> Pick now
-                </Button>
+                  <Button onClick={pickByRules}>
+                    <Dice1 className="mr-2 h-4 w-4" /> Pick now
+                  </Button>
                 </div>
                 {picked ? (
                   <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="grid gap-4 md:grid-cols-[160px_1fr]">
@@ -762,10 +596,10 @@ export default function JamApp() {
                     </div>
                     <div>
                       <h3 className="text-2xl font-semibold">{picked.title}</h3>
-                      <div className="mt-2 text-sm">
+                      {/* <div className="mt-2 text-sm"> */}
                        {/* check this leaning / weighted ave data when two people vote */}
-                        Leaning (avg): {preferenceAverage(picked.votes)?.toFixed(2) ?? "—"}
-                      </div>
+                        {/* Leaning (avg): {preferenceAverage(picked.votes)?.toFixed(2) ?? "—"} */}
+                      {/* </div> */}
                     </div>
                   </motion.div>
                 ) : (
@@ -782,23 +616,12 @@ export default function JamApp() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <p>
-                  This is a client-only prototype. Create a <em>session</em> name, add albums, and share the link so your friend can use the same session name on their device. For true realtime sync you’ll want a small backend; see below.
+                  Sessions are stored in Supabase. Share the session link so your friend joins the same room.
                 </p>
                 <ul className="list-inside list-disc space-y-1">
-                  <li>Data is stored in your browser’s LocalStorage per session name.</li>
-                  <li>Import/Export lets you merge or share lists manually.</li>
-                  <li>Random pick follows the club rules: “don’t fancy” albums are excluded, “dying to listen” votes count most, “could listen” votes count less, and unvoted albums still get a small chance.</li>
+                  <li>Votes are private per user; group stats drive the random pick.</li>
+                  <li>Random pick rules: “don’t fancy” excludes, “dying to listen” weighs most, “could listen” weighs less, and unvoted albums still get a small chance.</li>
                 </ul>
-                <Separator />
-                <div>
-                  <h4 className="mb-1 font-medium">Next steps for realtime</h4>
-                  <ol className="list-inside list-decimal space-y-1">
-                    <li>Add Supabase (Postgres + Row Level Security). Tables: <code>sessions</code>, <code>albums</code>, <code>votes</code>.</li>
-                    <li>Use Supabase Realtime on <code>albums</code>/<code>votes</code> to broadcast changes.</li>
-                    <li>Auth: anonymous magic-link or per-session PIN; scope RLS by <code>session_id</code>.</li>
-                    <li>Optional: Spotify search API to prefill album metadata & cover art.</li>
-                  </ol>
-                </div>
               </CardContent>
             </Card>
           </TabsContent>
