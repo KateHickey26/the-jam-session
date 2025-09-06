@@ -404,6 +404,20 @@ export default function JamApp() {
     return `${origin}${pathname}?${params.toString()}`
   }
 
+  // Optimistically set my vote for an album (local UI first, then server)
+  function setMyVoteLocal(albumId: string, value: PreferenceValue) {
+    setMyVotes(prev => ({ ...prev, [albumId]: value }))
+  }
+
+  // Optimistically clear my vote for an album
+  function clearMyVoteLocal(albumId: string) {
+    setMyVotes(prev => {
+      const next = { ...prev }
+      delete next[albumId]
+      return next
+    })
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
       <div className="mx-auto max-w-6xl">
@@ -592,22 +606,27 @@ export default function JamApp() {
                       </div>
 
                       <CardContent>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex items-center gap-2 flex-nowrap overflow-x-auto">
                           {PREFERENCE.map(p => (
                             <Button
                               key={p.value}
                               type="button"
                               disabled={!userId} // Don’t allow voting until we’ve hydrated the anonymous user id
                               variant={my === p.value ? "default" : "outline"}
-                              className={my === p.value ? "" : "bg-white"}
+                              className={`border ${my === p.value ? "" : "bg-white"}`}
                               // preference buttons disabled until userId is ready
                               onClick={async () => {
                                 // If userId hasn't been set yet, show a friendly message and bail.
                                 if (!userId) return alert("Your profile is still loading, try again.")
+                                // optimistic UI update so the button + card color respond immediately
+                                const prev = myVotes[al.id]
+                                setMyVoteLocal(al.id, p.value) // optimistic UI
+                                if (my === p.value) return
                                 try {
                                   await upsertVote(al.id, userId, p.value) // write to Supabase
                                   // No local setState needed; realtime subscription refreshes `myVotes` & `stats`.
                                 } catch {
+                                  setMyVotes(v => ({ ...v, [al.id]: prev })) // rollback local state on error
                                   alert("Could not save your vote.")
                                 }
                               }}
@@ -617,24 +636,35 @@ export default function JamApp() {
                             </Button>
                           ))}
 
-                          {typeof my === "number" && (
+                            {/* Always render; hide when not voted so its space is reserved */}
                             <Button
-                              variant="ghost"
-                              disabled={!userId}
+                              variant={typeof my === "number" ? "outline" : "ghost"}
+                              className={`border ${
+                                typeof my === "number" ? "bg-white hover:bg-accent/10" : "opacity-50 cursor-not-allowed"
+                              }`}
+                              disabled={!userId || typeof my !== "number"}
                               // Clear vote — also guard userId to avoid runtime errors.
                               // clear button disabled until userId is ready
                               onClick={async () => {
                                 if (!userId) return
+                                const prev = myVotes[al.id] // optimistic clear
+
+                                // optimistic clear so the card color + “active” button reset instantly
+                                clearMyVoteLocal(al.id)
+
                                 try {
                                   await deleteVote(al.id, userId)
                                 } catch {
+                                  // rollback on error
+                                  if (typeof prev === "number") {
+                                    setMyVoteLocal(al.id, prev as PreferenceValue)
+                                  }
                                   alert("Could not clear your vote.")
                                 }
                               }}
                             >
-                              Clear vote
+                              Clear
                             </Button>
-                          )}
                         </div>
                       </CardContent>
                     </Card>

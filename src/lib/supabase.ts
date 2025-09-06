@@ -40,13 +40,21 @@ export async function upsertVote(albumId: string, userId: string, value: number)
 }
 
 export async function deleteVote(albumId: string, userId: string) {
-  const { error } = await supabase
+  // select() after delete lets us detect 0-row deletions (e.g., RLS blocked or row didn’t exist)
+  const { data, error } = await supabase
     .from("votes")
-    .delete()
+    .delete({ count: "exact" })
     .eq("album_id", albumId)
     .eq("user_id", userId)
+    .select() // <-- important: returns deleted rows (if RLS allows)
 
   if (error) throw error
+
+  if (!data || data.length === 0) {
+    // This is a strong hint that either no row matched, or RLS disallowed the delete.
+    // You can keep it as console.warn or escalate to throw to force the UI rollback path.
+    console.warn("[deleteVote] No row deleted", { albumId, userId })
+  }
 }
 
 // ---------- Types used by helpers ----------
