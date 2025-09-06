@@ -600,7 +600,7 @@ export default function JamApp() {
                 const colors = myVoteColorClasses(my)
                 return (
                   <motion.div key={al.id} layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-                    <Card className={`overflow-hidden ${colors.card}`}>
+                    <Card className={`overflow-hidden ${colors.card} h-[280px] w-[320px]`}>
                       <div className="flex gap-4 p-4">
                         <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-100">
                           {al.cover ? (
@@ -630,14 +630,14 @@ export default function JamApp() {
                       </div>
 
                       <CardContent>
-                        <div className="flex items-center gap-2 flex-nowrap overflow-x-auto">
+                        <div className="grid gap-2 grid-cols-3">
                           {PREFERENCE.map(p => (
                             <Button
                               key={p.value}
                               type="button"
                               disabled={!userId} // Don’t allow voting until we’ve hydrated the anonymous user id
                               variant={my === p.value ? "default" : "outline"}
-                              className={`border ${my === p.value ? "" : "bg-white"}`}
+                              className={`w-full border ${my === p.value ? "" : "bg-white"}`}
                               // preference buttons disabled until userId is ready
                               onClick={async () => {
                                 // If userId hasn't been set yet, show a friendly message and bail.
@@ -659,11 +659,13 @@ export default function JamApp() {
                               <span className="mr-1">{p.dot}</span> {p.value}
                             </Button>
                           ))}
+                          </div>
 
+                          <div className="mt-2">
                             {/* Always render; hide when not voted so its space is reserved */}
                             <Button
                               variant={typeof my === "number" ? "outline" : "ghost"}
-                              className={`border ${
+                              className={`w-full border ${
                                 typeof my === "number" ? "bg-white hover:bg-accent/10" : "opacity-50 cursor-not-allowed"
                               }`}
                               disabled={!userId || typeof my !== "number"}
@@ -687,7 +689,7 @@ export default function JamApp() {
                                 }
                               }}
                             >
-                              Clear
+                              Clear vote
                             </Button>
                         </div>
                       </CardContent>
