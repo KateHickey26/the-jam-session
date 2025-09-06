@@ -180,6 +180,8 @@ export default function JamApp() {
   const [isAdding, setIsAdding] = useState(false)
   const [importText, setImportText] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -423,6 +425,25 @@ export default function JamApp() {
     }
   }
 
+  async function copyShareLink() {
+    if (!sessionId || !session.trim()) {
+      alert("Save the session name first, then share.");
+      return;
+    }
+    const url = shareUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareCopied(true);
+      // auto-close after a moment (optional)
+      setTimeout(() => {
+        setShareOpen(false);
+        setShareCopied(false);
+      }, 1000);
+    } catch {
+      alert("Couldn’t copy the link. You can copy it from the address bar.");
+    }
+  }
+
   // Random pick rules:
   // - Exclude any album with at least one "3" (don't fancy) — unless everything is excluded
   // - Weight: 1→+5 tickets, 2→+3 tickets, unvoted→+1 ticket
@@ -587,106 +608,136 @@ export default function JamApp() {
             />
             <p className="text-sm text-muted-foreground">Vote on your Jams, then let chance decide from the top picks.</p>
           </div>
+          {/* Header buttons */}
           <div className="flex flex-wrap items-center gap-2">
-          <Input
-            value={sessionInput}
-            onChange={(e) => setSessionInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") saveSession() }}
-            placeholder="Session name"
-            className="w-44"
-          />
-          <Button
-            onClick={saveSession}
-            variant="ghost"
-            className="border"
-            disabled={isSavingSession || !sessionInput.trim() || sessionInput.trim() === session}
-          >
-            {isSavingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Save
-          </Button>
-          <Button
-            variant="ghost"
-            className="border"
-            onClick={() => copyToClipboard(shareUrl())}
-            title="Copy share link"
-          >
-            <LinkIcon className="mr-2 h-4 w-4" />
-            Share
-          </Button>
-          {/* Import JSON button and dialog box */}
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="ghost" className="border"><Upload className="mr-2 h-4 w-4" />Import</Button>
-            </DialogTrigger>
-            <DialogContent className="bg-jam-paper-50 text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Import albums (JSON)</DialogTitle>
-              </DialogHeader>
-
-              <p className="text-sm text-muted-foreground">
-                Paste either an array of albums or an export object.
-                Examples:
-                <br />• <code>[{"{ \"title\":\"Blue\",\"artist\":\"Joni Mitchell\",\"cover\":\"...\" }"}]</code>
-                <br />• <code>{"{ \"session\":\"Week 1\", \"albums\":[ ... ] }"}</code>
-              </p>
-
-              <Textarea
-                placeholder="Paste JSON here"
-                className="min-h-[200px]"
-                value={importText}
-                onChange={(e) => setImportText(e.target.value)}
-              />
-
-              <div className="flex justify-end gap-2">
-                <DialogClose asChild>
-                  <Button variant="ghost" className="border">Cancel</Button>
-                </DialogClose>
-                <Button
-                  onClick={runImport}
-                  disabled={!sessionId || !importText.trim() || isImporting}
-                  variant="ghost"
-                  className="border"
-                >
-                  {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Import to session
+            {/* Session input field */}
+            <Input
+              value={sessionInput}
+              onChange={(e) => setSessionInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveSession() }}
+              placeholder="Session name"
+              className="w-44"
+            />
+            {/* Save session button */}
+            <Button
+              onClick={saveSession}
+              variant="ghost"
+              className="border"
+              disabled={isSavingSession || !sessionInput.trim() || sessionInput.trim() === session}
+            >
+              {isSavingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save
+            </Button>
+            {/* Share button and dialog box */}
+            <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+              <DialogTrigger asChild>
+                <Button variant="ghost" className="border" title="Copy share link">
+                  <LinkIcon className="mr-2 h-4 w-4" />
+                  Share
                 </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-          {/* Export button and dialog box  */}
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="ghost" className="border">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-              </Button>
-            </DialogTrigger>
+              </DialogTrigger>
+              <DialogContent className="bg-white text-zinc-900 backdrop-blur-sm sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Share session</DialogTitle>
+                </DialogHeader>
 
-            <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Export albums</DialogTitle>
-              </DialogHeader>
+                <p className="text-sm text-muted-foreground">
+                  Copy a link to invite someone to this session.
+                </p>
 
-              <p className="text-sm text-muted-foreground">
-                Do you want to download a JSON file of all albums in this session
-                <span className="font-medium"> “{session}”</span>?
-              </p>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    variant="ghost"
+                    className="border"
+                    onClick={copyShareLink}
+                  >
+                    {shareCopied ? "Copied to clipboard!" : "Copy to clipboard"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="border"
+                    onClick={() => setShareOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+            {/* Import JSON button and dialog box */}
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="ghost" className="border"><Upload className="mr-2 h-4 w-4" />Import</Button>
+              </DialogTrigger>
+              <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Import albums (JSON)</DialogTitle>
+                </DialogHeader>
 
-              <div className="mt-4 flex justify-end gap-2">
-                <DialogClose asChild>
-                  <Button variant="ghost" className="border">Cancel</Button>
-                </DialogClose>
+                <p className="text-sm text-muted-foreground">
+                  Paste either an array of albums or an export object.
+                  Examples:
+                  <br />• <code>[{"{ \"title\":\"Blue\",\"artist\":\"Joni Mitchell\",\"cover\":\"...\" }"}]</code>
+                  <br />• <code>{"{ \"session\":\"Week 1\", \"albums\":[ ... ] }"}</code>
+                </p>
 
-                <DialogClose asChild>
-                  <Button variant="ghost" className="border" onClick={exportJson}>Download JSON</Button>
-                </DialogClose>
-              </div>
-            </DialogContent>
-          </Dialog>
+                <Textarea
+                  placeholder="Paste JSON here"
+                  className="min-h-[200px] bg-zinc-100 border border-zinc-300 focus-visible:ring-jam-blueberry/50"
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                />
+
+                <div className="flex justify-end gap-2">
+                  <DialogClose asChild>
+                    <Button variant="ghost" className="border">Cancel</Button>
+                  </DialogClose>
+                  <Button
+                    onClick={runImport}
+                    disabled={!sessionId || !importText.trim() || isImporting}
+                    variant="ghost"
+                    className="border"
+                  >
+                    {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Import to session
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+            {/* Export button and dialog box  */}
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="ghost" className="border">
+                  <Download className="mr-2 h-4 w-4" />
+                  Export
+                </Button>
+              </DialogTrigger>
+
+              <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Export albums</DialogTitle>
+                </DialogHeader>
+
+                <p className="text-sm text-muted-foreground">
+                  Do you want to download a JSON file of all albums in this session
+                  <span className="font-medium"> “{session}”</span>?
+                </p>
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <DialogClose asChild>
+                    <Button variant="ghost" className="border">Cancel</Button>
+                  </DialogClose>
+
+                  <DialogClose asChild>
+                    <Button variant="ghost" className="border" onClick={exportJson}>Download JSON</Button>
+                  </DialogClose>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </motion.header>
-
+        {/* Top Cards */}
         <div className="mb-6 grid gap-4 md:grid-cols-[1.2fr_1fr]">
+          {/* Add album card */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between">
@@ -762,9 +813,8 @@ export default function JamApp() {
                 </datalist>
               </div>
             </CardContent>
-          </Card>
-
-
+          </Card>       
+          {/* This weeks pick card */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between">
@@ -815,6 +865,7 @@ export default function JamApp() {
             <TabsTrigger value="about">About</TabsTrigger>
           </TabsList>
 
+          {/* Voting tab */}
           <TabsContent value="list" className="mt-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -938,7 +989,7 @@ export default function JamApp() {
               })}
             </div>
           </TabsContent>
-
+          {/* Pantry tab */}
           <TabsContent value="pantry" className="mt-4">
             <Card>
               <CardHeader>
@@ -990,7 +1041,7 @@ export default function JamApp() {
               </CardContent>
             </Card>
           </TabsContent>
-
+          {/* About tab */}
           <TabsContent value="about" className="mt-4">
             <Card>
               <CardHeader>
