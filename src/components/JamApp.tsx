@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Copy, Dice1, Download, LinkIcon, Plus, Trash2, Upload, Users, Wand2 } from "lucide-react"
 import { ensureSession } from "@/lib/session"
+import { Loader2 } from "lucide-react"
 import {
   fetchAlbums,
   subscribeAlbums,
@@ -43,9 +44,9 @@ export type Album = {
 
 // 1 = most wanted ... 3 = not this week
 export const PREFERENCE = [
-  { value: 1, label: "I'm dying to listen to this", dot: "💙", bg: "bg-jam-blueberry/10",  ring: "ring-jam-blueberry/40",  text: "text-jam-blueberry" },
-  { value: 2, label: "I could listen to this this week", dot: "🍊", bg: "bg-jam-apricot/10", ring: "ring-jam-apricot/40", text: "text-jam-apricot" },
-  { value: 3, label: "I don't fancy this this week", dot: "😶", bg: "bg-zinc-100", ring: "ring-zinc-300", text: "text-zinc-500" },
+  { value: 1, label: "I'm dying to listen to this!", dot: "💙", bg: "bg-jam-blueberry/10",  ring: "ring-jam-blueberry/40",  text: "text-jam-blueberry" },
+  { value: 2, label: "I could listen to this, this week", dot: "🍊", bg: "bg-jam-apricot/10", ring: "ring-jam-apricot/40", text: "text-jam-apricot" },
+  { value: 3, label: "I don't fancy this right now", dot: "😶", bg: "bg-zinc-100", ring: "ring-zinc-300", text: "text-zinc-500" },
 ] as const
 
 function dbToAlbum(row: DBAlbum): Album {
@@ -173,6 +174,8 @@ export default function JamApp() {
   // group stats per album (albumId -> counts)
   const [stats, setStats] = useState<Record<string, { c1: number; c2: number; c3: number }>>({})
 
+  const [isAdding, setIsAdding] = useState(false)
+
   useEffect(() => {
     if (typeof window === "undefined") return
   
@@ -276,14 +279,11 @@ export default function JamApp() {
   }, [session])
 
   async function addAlbum() {
+    if (!sessionId) { alert("Session not ready yet."); return }
     const t = newAlbumTitle.trim()
     const a = newAlbumArtist.trim()
     const c = cover.trim()
     if (!t || !a) return
-    if (!sessionId) {
-      alert("Session not ready yet. Try again in a moment.")
-      return
-    }
 
     // exact duplicate check (case-insensitive)
     // When adding an album, we prevent exact duplicates (case-insensitive).
@@ -305,23 +305,41 @@ export default function JamApp() {
       if (!proceed) return
     }
 
+    setIsAdding(true) // show loading for 'Save' button
     try {
       await addAlbumRow(sessionId, t, a, c || undefined)
+      // Fallback refresh so the new album appears immediately even if Realtime is delayed
+      const rows = await fetchAlbums(sessionId)
+      setAlbums(rows.map(dbToAlbum))
       setNewAlbumTitle("")
       setNewAlbumArtist("")
       setCover("")
     } catch (err) {
       console.error(err)
       alert("Could not add album. Please try again.")
+    } finally {
+      setIsAdding(false) // album add complete
     }
   }
 
   async function removeAlbum(id: string) {
+    // Optimistic remove so the card disappears instantly
+    setAlbums(prev => prev.filter(a => a.id !== id))
     try {
       await deleteAlbumRow(id)
+      // Fallback refresh in case other clients changed the list concurrently
+      if (sessionId) {
+        const rows = await fetchAlbums(sessionId)
+        setAlbums(rows.map(dbToAlbum))
+      }
     } catch (err) {
       console.error(err)
       alert("Could not remove album. Please try again.")
+      // Rollback if the delete failed
+      if (sessionId) {
+        const rows = await fetchAlbums(sessionId)
+        setAlbums(rows.map(dbToAlbum))
+      }
     }
   }
 
@@ -465,6 +483,7 @@ export default function JamApp() {
                   value={newAlbumTitle} 
                   onChange={(e) => setNewAlbumTitle(e.target.value)} 
                   list={titleListId}
+                  disabled={isAdding}
                 />
                 {newAlbumTitle && titleSuggestions.length > 0 && titleSuggestions[0].toLowerCase() !== newAlbumTitle.toLowerCase() && (
                   <div className="mt-1 text-xs text-muted-foreground">
@@ -484,6 +503,7 @@ export default function JamApp() {
                   value={newAlbumArtist} 
                   onChange={(e) => setNewAlbumArtist(e.target.value)}
                   list={artistListId}
+                  disabled={isAdding}
                 />
                 {newAlbumArtist && artistSuggestions.length > 0 && artistSuggestions[0].toLowerCase() !== newAlbumArtist.toLowerCase() && (
                   <div className="text-xs text-muted-foreground">
@@ -502,8 +522,12 @@ export default function JamApp() {
                   placeholder="Cover URL (optional)" 
                   value={cover} 
                   onChange={(e) => setCover(e.target.value)} 
+                  disabled={isAdding}
                 />
-                <Button onClick={addAlbum}><Plus className="mr-2 h-4 w-4"/>Add</Button>
+                <Button onClick={addAlbum} disabled={isAdding}>
+                  {isAdding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4"/>}
+                  Add
+                </Button>
 
                 <datalist id={titleListId}>
                   {titleSuggestions.map(s => <option key={s} value={s} />)}

@@ -19,17 +19,34 @@ export async function fetchAlbums(sessionId: string): Promise<DBAlbum[]> {
   return data as DBAlbum[]
 }
 
-export function subscribeAlbums(sessionId: string, onChange: () => void): () => void {
+export function subscribeAlbums(sessionId: string, onChange: () => void) {
   const channel = supabase
-    .channel(`albums-${sessionId}`)
+    .channel(`albums:${sessionId}`)
     .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "albums", filter: `session_id=eq.${sessionId}` },
-      () => onChange()
+      'postgres_changes',
+      {
+        event: '*',          // insert | update | delete
+        schema: 'public',
+        table: 'albums',
+        filter: `session_id=eq.${sessionId}`, // only this session's rows
+      },
+      // () => onChange()
+      // Handy trace so can see it firing, can remove this later
+      (payload) => {
+        console.log('[albums realtime]', payload.eventType, payload.new || payload.old)
+        onChange()
+      }
     )
-    .subscribe()
+    //.subscribe()
+    // can remove console log later
+    .subscribe((status) => {
+      console.log('[albums channel]', status) // 'SUBSCRIBED' once ready
+    })
 
-  return () => supabase.removeChannel(channel)
+  // return an unsubscribe function
+  return () => {
+    supabase.removeChannel(channel)
+  }
 }
 
 export async function addAlbumRow(sessionId: string, title: string, artist: string, cover?: string) {
