@@ -894,7 +894,20 @@ export default function JamApp() {
                       <div className="flex gap-4 p-4">
                         <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-100">
                           {al.cover ? (
-                            <img src={al.cover} alt={`${al.title} cover`} className="h-full w-full object-cover" />
+                            <img
+                            src={al.cover}
+                            alt={`${al.title} cover`}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              const img = e.currentTarget;
+                              img.onerror = null;           // avoid loop
+                              img.src = "";                 // clear broken src
+                              img.alt = "No cover";         // show fallback text
+                              img.className = "h-full w-full object-cover";
+                            }}
+                          />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center text-xs text-zinc-400">No cover</div>
                           )}
