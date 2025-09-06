@@ -24,7 +24,9 @@ import {
   fetchPantry,
   archiveAlbumRow,
   restoreAlbumRow,
+  bulkAddAlbums,
   type DBAlbum,
+  type NewAlbumInput,
 } from "@/lib/albums"
 import {
   upsertVote,
@@ -175,8 +177,9 @@ export default function JamApp() {
   // group stats per album (albumId -> counts)
   const [stats, setStats] = useState<Record<string, { c1: number; c2: number; c3: number }>>({})
   const [pantry, setPantry] = useState<Album[]>([]);
-
   const [isAdding, setIsAdding] = useState(false)
+  const [importText, setImportText] = useState("");
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -513,6 +516,63 @@ export default function JamApp() {
     setSession(next) // this is what triggers ensureSession(...) in your effect
   }
 
+  async function runImport() {
+    if (!sessionId) { alert("Session not ready yet."); return; }
+  
+    let payload: unknown;
+    try {
+      payload = JSON.parse(importText);
+    } catch {
+      alert("That isn’t valid JSON.");
+      return;
+    }
+  
+    // Two supported shapes: array of albums or { albums: [...] }
+    let albumsArray: unknown;
+    if (Array.isArray(payload)) {
+      albumsArray = payload;
+    } else if (payload && typeof payload === "object" && Array.isArray((payload as { albums?: unknown }).albums)) {
+      albumsArray = (payload as { albums: unknown[] }).albums;
+    }
+  
+    if (!albumsArray || !Array.isArray(albumsArray)) {
+      alert("JSON must be an array of albums, or an object with an 'albums' array.");
+      return;
+    }
+  
+    // Validate & cast into NewAlbumInput[]
+    const cleaned: NewAlbumInput[] = (albumsArray as unknown[])
+      .map((a): NewAlbumInput | null => {
+        if (!a || typeof a !== "object") return null;
+        const obj = a as Record<string, unknown>;
+        const title = typeof obj.title === "string" ? obj.title.trim() : "";
+        const artist = typeof obj.artist === "string" ? obj.artist.trim() : "";
+        const cover = typeof obj.cover === "string" ? obj.cover.trim() : null;
+        if (!title || !artist) return null;
+        return { title, artist, cover };
+      })
+      .filter((a): a is NewAlbumInput => a !== null);
+  
+    if (!cleaned.length) {
+      alert("Found no valid albums (need at least title & artist).");
+      return;
+    }
+  
+    setIsImporting(true);
+    try {
+      await bulkAddAlbums(sessionId, cleaned);
+      const rows = await fetchAlbums(sessionId);
+      setAlbums(rows.map(dbToAlbum));
+      setImportText("");
+      alert(`Imported ${cleaned.length} album(s).`);
+    } catch (e) {
+      console.error(e);
+      alert("Import failed. Check JSON and RLS policies for 'albums' INSERT.");
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
       <div className="mx-auto max-w-6xl">
@@ -550,17 +610,40 @@ export default function JamApp() {
             <LinkIcon className="mr-2 h-4 w-4" />
             Share
           </Button>
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button variant="outline"><Upload className="mr-2 h-4 w-4"/>Import</Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Import JSON (local preview only)</DialogTitle>
-                </DialogHeader>
-                <Textarea placeholder="Paste JSON here" className="min-h-[160px]" onChange={(e) => importJson(e.target.value)} />
-              </DialogContent>
-            </Dialog>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline"><Upload className="mr-2 h-4 w-4" />Import</Button>
+            </DialogTrigger>
+            <DialogContent className="bg-jam-paper-50 text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Import albums (JSON)</DialogTitle>
+              </DialogHeader>
+
+              <p className="text-sm text-muted-foreground">
+                Paste either an array of albums or an export object.
+                Examples:
+                <br />• <code>[{"{ \"title\":\"Blue\",\"artist\":\"Joni Mitchell\",\"cover\":\"...\" }"}]</code>
+                <br />• <code>{"{ \"session\":\"Week 1\", \"albums\":[ ... ] }"}</code>
+              </p>
+
+              <Textarea
+                placeholder="Paste JSON here"
+                className="min-h-[200px]"
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+              />
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  onClick={runImport}
+                  disabled={!sessionId || !importText.trim() || isImporting}
+                >
+                  {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Import to session
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
             <Button variant="outline" onClick={exportJson}><Download className="mr-2 h-4 w-4"/>Export</Button>
           </div>
         </motion.header>

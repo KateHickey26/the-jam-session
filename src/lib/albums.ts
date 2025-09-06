@@ -9,6 +9,13 @@ export type DBAlbum = {
   created_at: string // timestamp as ISO string
 }
 
+export type NewAlbumInput = { 
+  title: string; 
+  artist: string; 
+  cover?: string | null 
+};
+
+
 export async function fetchAlbums(sessionId: string) {
   const { data, error } = await supabase
     .from("albums")
@@ -86,4 +93,40 @@ export async function restoreAlbumRow(albumId: string) {
     .update({ is_active: true })
     .eq("id", albumId);
   if (error) throw error;
+}
+
+export async function bulkAddAlbums(sessionId: string, items: NewAlbumInput[]): Promise<DBAlbum[]> {
+  if (!items.length) return [];
+
+  const rows = items
+    .map(a => ({
+      session_id: sessionId,
+      title: a.title?.trim(),
+      artist: a.artist?.trim(),
+      cover: a.cover ?? null,
+    }))
+    .filter(a => a.title && a.artist);
+
+  const seen = new Set<string>();
+  const unique = rows.filter(r => {
+    const key = `${r.title.toLowerCase()}::${r.artist.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const chunkSize = 50;
+  const inserted: DBAlbum[] = [];
+
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const slice = unique.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from("albums")
+      .insert(slice)
+      .select();
+    if (error) throw error;
+    if (data) inserted.push(...(data as DBAlbum[]));
+  }
+
+  return inserted;
 }
