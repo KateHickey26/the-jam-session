@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogClose, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
@@ -597,22 +597,26 @@ export default function JamApp() {
           />
           <Button
             onClick={saveSession}
+            variant="ghost"
+            className="border"
             disabled={isSavingSession || !sessionInput.trim() || sessionInput.trim() === session}
           >
             {isSavingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Save
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
+            className="border"
             onClick={() => copyToClipboard(shareUrl())}
             title="Copy share link"
           >
             <LinkIcon className="mr-2 h-4 w-4" />
             Share
           </Button>
+          {/* Import JSON button and dialog box */}
           <Dialog>
             <DialogTrigger asChild>
-              <Button variant="outline"><Upload className="mr-2 h-4 w-4" />Import</Button>
+              <Button variant="ghost" className="border"><Upload className="mr-2 h-4 w-4" />Import</Button>
             </DialogTrigger>
             <DialogContent className="bg-jam-paper-50 text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
               <DialogHeader>
@@ -634,9 +638,14 @@ export default function JamApp() {
               />
 
               <div className="flex justify-end gap-2">
+                <DialogClose asChild>
+                  <Button variant="ghost" className="border">Cancel</Button>
+                </DialogClose>
                 <Button
                   onClick={runImport}
                   disabled={!sessionId || !importText.trim() || isImporting}
+                  variant="ghost"
+                  className="border"
                 >
                   {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Import to session
@@ -644,7 +653,36 @@ export default function JamApp() {
               </div>
             </DialogContent>
           </Dialog>
-            <Button variant="outline" onClick={exportJson}><Download className="mr-2 h-4 w-4"/>Export</Button>
+          {/* Export button and dialog box  */}
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="ghost" className="border">
+                <Download className="mr-2 h-4 w-4" />
+                Export
+              </Button>
+            </DialogTrigger>
+
+            <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Export albums</DialogTitle>
+              </DialogHeader>
+
+              <p className="text-sm text-muted-foreground">
+                Do you want to download a JSON file of all albums in this session
+                <span className="font-medium"> “{session}”</span>?
+              </p>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <DialogClose asChild>
+                  <Button variant="ghost" className="border">Cancel</Button>
+                </DialogClose>
+
+                <DialogClose asChild>
+                  <Button variant="ghost" className="border" onClick={exportJson}>Download JSON</Button>
+                </DialogClose>
+              </div>
+            </DialogContent>
+          </Dialog>
           </div>
         </motion.header>
 
@@ -704,8 +742,15 @@ export default function JamApp() {
                   onChange={(e) => setCover(e.target.value)} 
                   disabled={isAdding}
                 />
-                <Button onClick={addAlbum} disabled={isAdding}>
-                  {isAdding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4"/>}
+                <Button onClick={addAlbum} disabled={isAdding || !newAlbumTitle.trim() || !newAlbumArtist.trim()}
+                variant={newAlbumTitle.trim() && newAlbumArtist.trim() && !isAdding ? "ghost" : "default"}
+
+                >
+                   {isAdding ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="mr-2 h-4 w-4" />
+                    )}
                   Add
                 </Button>
 
@@ -774,12 +819,13 @@ export default function JamApp() {
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
               <Button
-                variant="outline"
+                variant="ghost"
+                className="border"
                 onClick={() => setAlbums(prev => rankAlbumsByMyVote(prev, myVotes))}
               >
                 Sort jams
               </Button>
-                <Button variant="ghost" onClick={() => setAlbums([...albums].sort((a,b) => a.createdAt - b.createdAt))}>
+                <Button variant="ghost" className="border" onClick={() => setAlbums([...albums].sort((a,b) => a.createdAt - b.createdAt))}>
                   Reset order
                 </Button>
               </div>
