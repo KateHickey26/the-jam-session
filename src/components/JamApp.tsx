@@ -124,6 +124,9 @@ function suggestClose(input: string, candidates: string[], maxDistance = 2) {
 }
 
 // sorting based on users votes
+// Sorts the visible list for THIS user only.
+// Order: 1 (dying to listen) → 2 (could listen) → 3 (not this week) → unvoted.
+// We explicitly DO NOT use other members’ votes here.
 function rankAlbumsByMyVote(
   albums: Album[],
   myVotes: Record<string, PreferenceValue | undefined>
@@ -141,7 +144,14 @@ function rankAlbumsByMyVote(
 
 // ---- Main Component ----
 export default function JamApp() {
-  const [session, setSession] = useState<string>(() => new URLSearchParams(location.search).get("session") || "demo session")
+  // Store the current session name.
+  // IMPORTANT: Guard any direct window/location access so SSR doesn't crash.
+  // We read from window.location only in the browser; otherwise fall back to a default.
+  const [session, setSession] = useState<string>(() => {
+    if (typeof window === "undefined") return "demo session"
+    const params = new URLSearchParams(window.location.search)
+    return params.get("session") || "demo session"
+  })
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [albums, setAlbums] = useState<Album[]>([])
   const [newAlbumTitle, setNewAlbumTitle] = useState("")
@@ -151,46 +161,75 @@ export default function JamApp() {
   const [artistSuggestions, setArtistSuggestions] = useState<string[]>([])
   const titleListId = "jam-title-list"
   const artistListId = "jam-artist-list"
-  const [userName, setUserName] = useState<string>(() => localStorage.getItem("the-jam-session/userName") || "")
+  // Start empty; we'll hydrate from localStorage after the component mounts on the client.
+  // This avoids "localStorage is not defined" during SSR.
+  const [userName, setUserName] = useState<string>("") // start with empty, load from localStorage in use effect after mount
+  const [userId, setUserId]   = useState<string>("")     // start empty, hydrate later
+
   const [picked, setPicked] = useState<Album | null>(null)
-
-  // user identity (ephemeral; not stored server-side)
-  const [userId] = useState<string>(() => {
-    const k = "the-jam-session/userId"
-    const cached = localStorage.getItem(k)
-    if (cached) return cached
-    const id = uuidv4()
-    localStorage.setItem(k, id)
-    return id
-  })
-
+  
   // my vote per album (albumId -> 1|2|3)
   const [myVotes, setMyVotes] = useState<Record<string, PreferenceValue | undefined>>({})
   // group stats per album (albumId -> counts)
   const [stats, setStats] = useState<Record<string, { c1: number; c2: number; c3: number }>>({})
 
   useEffect(() => {
+    if (typeof window === "undefined") return
+  
+    // hydrate userId (create if missing)
+    // Create or restore an anonymous per-device user id.
+    // We use this to store private votes without full auth (for now).
+    const uidKey = "the-jam-session/userId"
+    let id = localStorage.getItem(uidKey)
+    if (!id) {
+      id = uuidv4()
+      localStorage.setItem(uidKey, id)
+    }
+    setUserId(id)
+  
+    // hydrate userName
+    // Restore friendly display name (optional).
+    setUserName(localStorage.getItem("the-jam-session/userName") || "")
+  }, [])
+
+  // persist name after mount only (useEffect runs client-side)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (userName) {
+      localStorage.setItem("the-jam-session/userName", userName)
+    } else {
+      localStorage.removeItem("the-jam-session/userName")
+    }
+  }, [userName])
+
+
+  useEffect(() => {
+    if (!userId) return; // wait until hydrated
     let unsubAlbums: (() => void) | null = null
     let unsubVotes: (() => void) | null = null
     let alive = true
 
     ;(async () => {
+      // 1) Ensure the session exists (creates DB row if needed) and get its id.
       const id = await ensureSession(session)
       if (!alive) return
       setSessionId(id)
 
       // initial albums
+      // 2) Initial fetch: albums for this session.
       const rows = await fetchAlbums(id)
       if (!alive) return
       setAlbums(rows.map(dbToAlbum))
 
       // initial my votes + stats
+      // 3) Initial fetch: my votes (private) and aggregated stats (public counts only).
       const [mv, st] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
       if (!alive) return
       setMyVotes(mv)
       setStats(st)
 
       // realtime: albums table (insert/delete)
+      // 4) Subscribe to album inserts/deletes; on change, refetch albums.
       unsubAlbums = subscribeAlbums(id, async () => {
         const latest = await fetchAlbums(id)
         if (!alive) return
@@ -198,6 +237,8 @@ export default function JamApp() {
       })
 
       // realtime: votes table (any change → refresh myVotes + stats)
+      // 5) Subscribe to ANY vote changes; on change, refetch my votes + stats.
+      // We never show other users' identities or raw votes.
       unsubVotes = subscribeVotes(async () => {
         const [mv2, st2] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
         if (!alive) return
@@ -206,6 +247,7 @@ export default function JamApp() {
       })
     })()
 
+    // Cleanup the realtime channels on unmount or session change.
     return () => {
       alive = false
       if (unsubAlbums) unsubAlbums()
@@ -221,6 +263,18 @@ export default function JamApp() {
     setArtistSuggestions(suggestClose(newAlbumArtist, artists))
   }, [newAlbumTitle, newAlbumArtist, albums])
 
+  // Keep the ?session=<name> in the URL in sync with the input field.
+  // This helps you share a link with the current session, and also preserves
+  // the session on refresh / new tab. Guarded for SSR since `window` doesn’t exist there.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    url.searchParams.set("session", session)
+    // Replace current history entry (no page reload) so the back button isn’t polluted
+    // with every keystroke in the session input.
+    window.history.replaceState(null, "", url.toString())
+  }, [session])
+
   async function addAlbum() {
     const t = newAlbumTitle.trim()
     const a = newAlbumArtist.trim()
@@ -232,6 +286,8 @@ export default function JamApp() {
     }
 
     // exact duplicate check (case-insensitive)
+    // When adding an album, we prevent exact duplicates (case-insensitive).
+    // For near-duplicates, we show a confirmation prompt but still allow adding if the user insists.
     const key = `${t.toLowerCase()}::${a.toLowerCase()}`
     const existsExact = albums.some(
       (al) => `${al.title.toLowerCase()}::${al.artist.toLowerCase()}` === key
@@ -280,13 +336,17 @@ export default function JamApp() {
     }
   }
 
+  // Random pick rules:
+  // - Exclude any album with at least one "3" (don't fancy) — unless everything is excluded
+  // - Weight: 1→+5 tickets, 2→+3 tickets, unvoted→+1 ticket
+  // - No exposure of raw per-user votes; we only use aggregated counts.
   function hasBlockFromStats(s?: { c1: number; c2: number; c3: number }) {
     return !!s && s.c3 > 0
   }
 
   function weightFromStats(s?: { c1: number; c2: number; c3: number }) {
-    if (!s) return 1
-    if (s.c3 > 0) return 0
+    if (!s) return 1         // unvoted album still has a chance
+    if (s.c3 > 0) return 0   // excluded from pool
     const w = s.c1 * 5 + s.c2 * 3
     return w > 0 ? w : 1
   }
@@ -336,12 +396,13 @@ export default function JamApp() {
   }
 
   function shareUrl() {
-    return `${location.origin}${location.pathname}?session=${encodeURIComponent(session)}`
+    // Guard for SSR: `window` does not exist on the server.
+    if (typeof window === "undefined") return ""
+    const { origin, pathname, search } = window.location
+    const params = new URLSearchParams(search)
+    params.set("session", session) // ensure the current session is in the URL
+    return `${origin}${pathname}?${params.toString()}`
   }
-
-  useEffect(() => {
-    if (userName) localStorage.setItem("the-jam-session/userName", userName)
-  }, [userName])
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
@@ -536,11 +597,16 @@ export default function JamApp() {
                             <Button
                               key={p.value}
                               type="button"
+                              disabled={!userId} // Don’t allow voting until we’ve hydrated the anonymous user id
                               variant={my === p.value ? "default" : "outline"}
                               className={my === p.value ? "" : "bg-white"}
+                              // preference buttons disabled until userId is ready
                               onClick={async () => {
+                                // If userId hasn't been set yet, show a friendly message and bail.
+                                if (!userId) return alert("Your profile is still loading, try again.")
                                 try {
-                                  await upsertVote(al.id, userId, p.value)
+                                  await upsertVote(al.id, userId, p.value) // write to Supabase
+                                  // No local setState needed; realtime subscription refreshes `myVotes` & `stats`.
                                 } catch {
                                   alert("Could not save your vote.")
                                 }
@@ -554,7 +620,11 @@ export default function JamApp() {
                           {typeof my === "number" && (
                             <Button
                               variant="ghost"
+                              disabled={!userId}
+                              // Clear vote — also guard userId to avoid runtime errors.
+                              // clear button disabled until userId is ready
                               onClick={async () => {
+                                if (!userId) return
                                 try {
                                   await deleteVote(al.id, userId)
                                 } catch {
@@ -562,7 +632,7 @@ export default function JamApp() {
                                 }
                               }}
                             >
-                              Clear
+                              Clear vote
                             </Button>
                           )}
                         </div>
