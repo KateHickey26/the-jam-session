@@ -9,14 +9,15 @@ export type DBAlbum = {
   created_at: string // timestamp as ISO string
 }
 
-export async function fetchAlbums(sessionId: string): Promise<DBAlbum[]> {
+export async function fetchAlbums(sessionId: string) {
   const { data, error } = await supabase
     .from("albums")
     .select("*")
     .eq("session_id", sessionId)
-    .order("created_at", { ascending: false })
-  if (error) throw error
-  return data as DBAlbum[]
+    .eq("is_active", true)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data as DBAlbum[];
 }
 
 export function subscribeAlbums(sessionId: string, onChange: () => void) {
@@ -59,4 +60,30 @@ export async function addAlbumRow(sessionId: string, title: string, artist: stri
 export async function deleteAlbumRow(id: string) {
   const { error } = await supabase.from("albums").delete().eq("id", id)
   if (error) throw error
+}
+
+export async function fetchPantry(sessionId: string) {
+  const { data, error } = await supabase
+    .from("albums")
+    .select("*")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data as DBAlbum[];
+}
+
+export async function archiveAlbumRow(albumId: string) {
+  const { error } = await supabase
+    .from("albums")
+    .update({ is_active: false })
+    .eq("id", albumId);
+  if (error) throw error;
+}
+
+export async function restoreAlbumRow(albumId: string) {
+  const { error } = await supabase
+    .from("albums")
+    .update({ is_active: true })
+    .eq("id", albumId);
+  if (error) throw error;
 }

@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { Copy, Dice1, Download, LinkIcon, Plus, Trash2, Upload, Users, Wand2 } from "lucide-react"
+import { Copy, Dice1, Dice2, Dice3, Dice5, Download, LinkIcon, Plus, Trash2, Upload, Users, Wand2 } from "lucide-react"
 import { ensureSession } from "@/lib/session"
 import { Loader2 } from "lucide-react"
 import {
@@ -21,6 +21,9 @@ import {
   subscribeAlbums,
   addAlbumRow,
   deleteAlbumRow,
+  fetchPantry,
+  archiveAlbumRow,
+  restoreAlbumRow,
   type DBAlbum,
 } from "@/lib/albums"
 import {
@@ -148,12 +151,10 @@ export default function JamApp() {
   // Store the current session name.
   // IMPORTANT: Guard any direct window/location access so SSR doesn't crash.
   // We read from window.location only in the browser; otherwise fall back to a default.
-  const [session, setSession] = useState<string>(() => {
-    if (typeof window === "undefined") return "demo session"
-    const params = new URLSearchParams(window.location.search)
-    return params.get("session") || "demo session"
-  })
+  const [session, setSession] = useState<string>("demo session")
+  const [sessionInput, setSessionInput] = useState<string>(session)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [isSavingSession, setIsSavingSession] = useState(false)
   const [albums, setAlbums] = useState<Album[]>([])
   const [newAlbumTitle, setNewAlbumTitle] = useState("")
   const [newAlbumArtist, setNewAlbumArtist] = useState("")
@@ -173,6 +174,7 @@ export default function JamApp() {
   const [myVotes, setMyVotes] = useState<Record<string, PreferenceValue | undefined>>({})
   // group stats per album (albumId -> counts)
   const [stats, setStats] = useState<Record<string, { c1: number; c2: number; c3: number }>>({})
+  const [pantry, setPantry] = useState<Album[]>([]);
 
   const [isAdding, setIsAdding] = useState(false)
 
@@ -195,6 +197,15 @@ export default function JamApp() {
     setUserName(localStorage.getItem("the-jam-session/userName") || "")
   }, [])
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const fromUrl = params.get("session")
+    if (fromUrl) {
+      setSession(fromUrl)
+      setSessionInput(fromUrl)
+    }
+  }, [])
+
   // persist name after mount only (useEffect runs client-side)
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -212,42 +223,56 @@ export default function JamApp() {
     let unsubVotes: (() => void) | null = null
     let alive = true
 
+    setIsSavingSession(true)
+
     ;(async () => {
-      // 1) Ensure the session exists (creates DB row if needed) and get its id.
-      const id = await ensureSession(session)
-      if (!alive) return
-      setSessionId(id)
-
-      // initial albums
-      // 2) Initial fetch: albums for this session.
-      const rows = await fetchAlbums(id)
-      if (!alive) return
-      setAlbums(rows.map(dbToAlbum))
-
-      // initial my votes + stats
-      // 3) Initial fetch: my votes (private) and aggregated stats (public counts only).
-      const [mv, st] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
-      if (!alive) return
-      setMyVotes(mv)
-      setStats(st)
-
-      // realtime: albums table (insert/delete)
-      // 4) Subscribe to album inserts/deletes; on change, refetch albums.
-      unsubAlbums = subscribeAlbums(id, async () => {
-        const latest = await fetchAlbums(id)
+      try {
+        // 1) Ensure the session exists (creates DB row if needed) and get its id.
+        const id = await ensureSession(session)
         if (!alive) return
-        setAlbums(latest.map(dbToAlbum))
-      })
+        setSessionId(id)
 
-      // realtime: votes table (any change → refresh myVotes + stats)
-      // 5) Subscribe to ANY vote changes; on change, refetch my votes + stats.
-      // We never show other users' identities or raw votes.
-      unsubVotes = subscribeVotes(async () => {
-        const [mv2, st2] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
+        // initial albums
+        // 2) Initial fetch: albums for this session.
+        const rows = await fetchAlbums(id)
         if (!alive) return
-        setMyVotes(mv2)
-        setStats(st2)
-      })
+        setAlbums(rows.map(dbToAlbum))
+
+        // initial my votes + stats
+        // 3) Initial fetch: my votes (private) and aggregated stats (public counts only).
+        const [mv, st, all] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id), fetchPantry(id),])
+        if (!alive) return
+        setMyVotes(mv)
+        setStats(st)
+        setPantry(all.map(dbToAlbum));
+
+        // realtime: albums table (insert/delete)
+        // 4) Subscribe to album inserts/deletes; on change, refetch albums.
+        unsubAlbums = subscribeAlbums(id, async () => {
+          const [active, all] = await Promise.all([
+            fetchAlbums(id),
+            fetchPantry(id),
+          ]);
+          if (!alive) return;
+          setAlbums(active.map(dbToAlbum));
+          setPantry(all.map(dbToAlbum));
+        });
+
+        // realtime: votes table (any change → refresh myVotes + stats)
+        // 5) Subscribe to ANY vote changes; on change, refetch my votes + stats.
+        // We never show other users' identities or raw votes.
+        unsubVotes = subscribeVotes(async () => {
+          const [mv2, st2] = await Promise.all([fetchMyVotes(id, userId), fetchStats(id)])
+          if (!alive) return
+          setMyVotes(mv2)
+          setStats(st2)
+        })
+      } catch (e) {
+        console.error(e)
+        alert("Failed to load this session.")
+      } finally {
+        if (alive) setIsSavingSession(false)
+      }
     })()
 
     // Cleanup the realtime channels on unmount or session change.
@@ -256,7 +281,6 @@ export default function JamApp() {
       if (unsubAlbums) unsubAlbums()
       if (unsubVotes) unsubVotes()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, userId])
 
   // update suggestions as user types to add an album (from current albums only)
@@ -276,6 +300,7 @@ export default function JamApp() {
     // Replace current history entry (no page reload) so the back button isn’t polluted
     // with every keystroke in the session input.
     window.history.replaceState(null, "", url.toString())
+    setSessionInput(session)
   }, [session])
 
   async function addAlbum() {
@@ -351,6 +376,47 @@ export default function JamApp() {
     } catch (err) {
       console.error(err)
       alert("Could not clear your votes.")
+    }
+  }
+
+  async function archiveAlbum(id: string) {
+    // optimistic: remove from active pool immediately
+    setAlbums(prev => prev.filter(a => a.id !== id));
+    try {
+      await archiveAlbumRow(id);
+      // refresh both active & pantry to stay in sync
+      if (sessionId) {
+        const [active, all] = await Promise.all([
+          fetchAlbums(sessionId),
+          fetchPantry(sessionId),
+        ]);
+        setAlbums(active.map(dbToAlbum));
+        setPantry(all.map(dbToAlbum)); // see pantry state below
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Could not move album to pantry.");
+      if (sessionId) {
+        const rows = await fetchAlbums(sessionId);
+        setAlbums(rows.map(dbToAlbum));
+      }
+    }
+  }
+
+  async function restoreAlbum(id: string) {
+    try {
+      await restoreAlbumRow(id);
+      if (sessionId) {
+        const [active, all] = await Promise.all([
+          fetchAlbums(sessionId),
+          fetchPantry(sessionId),
+        ]);
+        setAlbums(active.map(dbToAlbum));
+        setPantry(all.map(dbToAlbum));
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Could not restore album to pool.");
     }
   }
 
@@ -436,6 +502,17 @@ export default function JamApp() {
     })
   }
 
+  function saveSession() {
+    const next = sessionInput.trim()
+    if (!next) {
+      alert("Session name cannot be empty.")
+      return
+    }
+    if (next === session) return // no-op
+    setIsSavingSession(true)
+    setSession(next) // this is what triggers ensureSession(...) in your effect
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
       <div className="mx-auto max-w-6xl">
@@ -451,8 +528,28 @@ export default function JamApp() {
             <p className="text-sm text-muted-foreground">Vote on your Jams, then let chance decide from the top picks.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Input value={session} onChange={(e) => setSession(e.target.value)} placeholder="Session name" className="w-44" />
-            <Button variant="secondary" onClick={() => copyToClipboard(shareUrl())} title="Copy share link"><LinkIcon className="mr-2 h-4 w-4"/>Share</Button>
+          <Input
+            value={sessionInput}
+            onChange={(e) => setSessionInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") saveSession() }}
+            placeholder="Session name"
+            className="w-44"
+          />
+          <Button
+            onClick={saveSession}
+            disabled={isSavingSession || !sessionInput.trim() || sessionInput.trim() === session}
+          >
+            {isSavingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Save
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => copyToClipboard(shareUrl())}
+            title="Copy share link"
+          >
+            <LinkIcon className="mr-2 h-4 w-4" />
+            Share
+          </Button>
             <Dialog>
               <DialogTrigger asChild>
                 <Button variant="outline"><Upload className="mr-2 h-4 w-4"/>Import</Button>
@@ -539,29 +636,45 @@ export default function JamApp() {
             </CardContent>
           </Card>
 
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between">
-                <span>Your profile</span>
-                <Users className="h-4 w-4"/>
+                <span>This week’s pick</span>
+                <Button size="sm" variant="outline" onClick={pickByRules}>
+                  <Dice5 className="mr-2 h-4 w-4" /> Pick now
+                </Button>
               </CardTitle>
             </CardHeader>
+
             <CardContent>
-              <div className="flex items-center gap-3">
-                <Input placeholder="Your name (optional)" value={userName} onChange={(e) => setUserName(e.target.value)} />
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline"><Wand2 className="mr-2 h-4 w-4"/>Actions</Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuLabel>Voting</DropdownMenuLabel>
-                    <DropdownMenuItem onClick={clearMyVotes}>Clear my votes</DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>Share</DropdownMenuLabel>
-                    <DropdownMenuItem onClick={() => copyToClipboard(shareUrl())}><Copy className="mr-2 h-4 w-4"/>Copy link</DropdownMenuItem>
-                    {/* Starter list removed (we're Supabase-first now) */}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              {/* Keep the container height consistent with the left card */}
+              <div className="grid items-center gap-4 md:grid-cols-[120px_1fr] min-h-[88px]">
+                {picked ? (
+                  <>
+                    <div className="h-24 w-24 overflow-hidden rounded-xl bg-zinc-100">
+                      {picked.cover ? (
+                        <img
+                          src={picked.cover}
+                          alt={`${picked.title} cover`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs text-zinc-400">
+                          No cover
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-semibold">{picked.title}</div>
+                      <div className="truncate text-sm text-muted-foreground">{picked.artist}</div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Please vote to help choose this week’s pick!
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -570,7 +683,7 @@ export default function JamApp() {
         <Tabs defaultValue="list" className="mb-6">
           <TabsList>
             <TabsTrigger value="list">Albums</TabsTrigger>
-            <TabsTrigger value="pick">Pick</TabsTrigger>
+            <TabsTrigger value="pantry">Pantry</TabsTrigger>
             <TabsTrigger value="about">About</TabsTrigger>
           </TabsList>
 
@@ -583,9 +696,6 @@ export default function JamApp() {
               >
                 Sort jams
               </Button>
-                <Button variant="secondary" onClick={pickByRules}>
-                  <Dice1 className="mr-2 h-4 w-4" /> Spread the Pick
-                </Button>
                 <Button variant="ghost" onClick={() => setAlbums([...albums].sort((a,b) => a.createdAt - b.createdAt))}>
                   Reset order
                 </Button>
@@ -615,8 +725,8 @@ export default function JamApp() {
                               <div className="truncate text-base font-semibold">{al.title}</div>
                               <div className="truncate text-sm text-muted-foreground">{al.artist}</div>
                             </div>
-                            <Button size="icon" variant="ghost" onClick={() => removeAlbum(al.id)} title="Remove">
-                              <Trash2 className="h-4 w-4"/>
+                            <Button size="icon" variant="ghost" onClick={() => archiveAlbum(al.id)} title="Archive to pantry">
+                              <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
 
@@ -700,36 +810,53 @@ export default function JamApp() {
             </div>
           </TabsContent>
 
-          <TabsContent value="pick" className="mt-4">
+          <TabsContent value="pantry" className="mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>Pick Our Weekly Jam</CardTitle>
+                <CardTitle>Pantry (all jams)</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="mb-4 flex flex-wrap items-center gap-3">
-                  <Button onClick={pickByRules}>
-                    <Dice1 className="mr-2 h-4 w-4" /> Pick now
-                  </Button>
-                </div>
-                {picked ? (
-                  <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="grid gap-4 md:grid-cols-[160px_1fr]">
-                    <div className="h-40 w-40 overflow-hidden rounded-2xl bg-zinc-100">
-                      {picked.cover ? (
-                        <img src={picked.cover} alt={`${picked.title} cover`} className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-xs text-zinc-400">No cover</div>
-                      )}
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-semibold">{picked.title}</h3>
-                      {/* <div className="mt-2 text-sm"> */}
-                       {/* check this leaning / weighted ave data when two people vote */}
-                        {/* Leaning (avg): {preferenceAverage(picked.votes)?.toFixed(2) ?? "—"} */}
-                      {/* </div> */}
-                    </div>
-                  </motion.div>
+                {pantry.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No albums yet.</p>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No pick yet. Press Pick now to choose.</p>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {pantry.map(a => {
+                      const isActive = albums.some(x => x.id === a.id); // quick check
+                      return (
+                        <Card key={a.id} className="overflow-hidden h-[280px] w-[320px]">
+                          <div className="flex gap-4 p-4">
+                            <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-100">
+                              {a.cover ? (
+                                <img src={a.cover} alt={`${a.title} cover`} className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-xs text-zinc-400">No cover</div>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <div className="truncate text-base font-semibold">{a.title}</div>
+                                  <div className="truncate text-sm text-muted-foreground">{a.artist}</div>
+                                  <Badge variant="outline">
+                                  {isActive ? "In pool" : "Archived"}
+                                </Badge>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <CardContent>
+                            <div className="flex gap-2">
+                              {isActive ? (
+                                <Button variant="outline" onClick={() => archiveAlbum(a.id)}>Archive to pantry</Button>
+                              ) : (
+                                <Button variant="outline" onClick={() => restoreAlbum(a.id)}>Restore to pool</Button>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
                 )}
               </CardContent>
             </Card>
