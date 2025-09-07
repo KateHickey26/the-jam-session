@@ -14,6 +14,9 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can edit the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+### Tech stack
+NextJS, TypeScript, CSS, HTML, Supabase (database), SQL, Vercel (deployment)
+
 ### Rules for album being picked
 	•	Disqualify if any user voted 3 (“not this week”).
 	•	Weight 1-votes double; 2-votes single. (Album “tickets” = 2 × #1s + 1 × #2s.)

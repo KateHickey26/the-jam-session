@@ -70,6 +70,13 @@ export type StatRow = {
   count_3: number
 }
 
+export type Profile = {
+  id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  created_at: string;
+};
+
 // ---------- Read my votes for a session ----------
 export async function fetchMyVotes(sessionId: string, userId: string) {
   // We still use the join to filter by session, but we only TYPE the fields we read.
@@ -148,4 +155,70 @@ export async function clearVotesForUserInSession(sessionId: string, userId: stri
     .in("album_id", ids)
 
   if (error) throw error
+}
+
+// --- migrate votes from local anon id -> authenticated user id ---
+// NOTE: With strict RLS you must either (a) temporarily allow delete-any on `votes`,
+// or (b) run this as a Postgres RPC with SECURITY DEFINER / service role.
+export async function migrateVotesFromAnonToAuth(sessionId: string, anonId: string, authId: string) {
+  // 1) Get album ids in this session
+  const { data: albums, error: albumsErr } = await supabase
+    .from("albums").select("id").eq("session_id", sessionId)
+  if (albumsErr || !albums) return
+
+  if (albumsErr) throw albumsErr;
+  if (!albums || albums.length === 0) return;
+  const albumIds = albums.map(a => a.id)
+  if (albumIds.length === 0) return
+
+  // 2) Fetch anon votes for these albums
+  const { data: oldVotes, error: oldErr } = await supabase
+    .from("votes")
+    .select("album_id, value")
+    .eq("user_id", anonId)
+    .in("album_id", albumIds)
+
+  if (oldErr) throw oldErr;
+  if (!oldVotes || oldVotes.length === 0) return
+
+  // 3) Upsert same votes under the auth user
+  const { error: upsertErr } = await supabase
+    .from("votes")
+    .upsert(
+      oldVotes.map(v => ({
+        album_id: v.album_id,
+        user_id: authId,
+        value: v.value,
+      })),
+      { onConflict: "album_id,user_id" }
+    );
+  if (upsertErr) throw upsertErr;
+
+  // 4) Delete the anon rows
+  const { error: delErr } = await supabase
+    .from("votes")
+    .delete()
+    .eq("user_id", anonId)
+    .in("album_id", albumIds);
+
+  if (delErr) throw delErr;
+}
+
+// ----- User profiles -----
+export async function getMyProfile() {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", (await supabase.auth.getUser()).data.user?.id ?? "")
+    .single();
+  if (error && error.code !== "PGRST116") throw error; // 116 = no rows
+  return (data as Profile | null) ?? null;
+}
+
+export async function upsertMyProfile(partial: { display_name?: string; avatar_url?: string }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not signed in");
+  const payload = { id: user.id, ...partial };
+  const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+  if (error) throw error;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image"
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useState } from "react"
 import { v4 as uuidv4 } from "uuid"
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { Copy, Dice1, Dice2, Dice3, Dice5, Download, LinkIcon, Plus, Trash2, Upload, Users, Wand2 } from "lucide-react"
+import { Dice5, Download, LinkIcon, Plus, Trash2, Upload } from "lucide-react"
 import { ensureSession } from "@/lib/session"
 import { Loader2 } from "lucide-react"
 import {
@@ -35,8 +35,11 @@ import {
   fetchStats,
   subscribeVotes,
   clearVotesForUserInSession,
+  migrateVotesFromAnonToAuth,
   type PreferenceValue,
 } from "@/lib/supabase"
+import { getCurrentUser, onAuthChange, signInWithGoogle, sendMagicLink, signOut } from "@/lib/auth"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 // ---- Types ----
 export type Album = {
@@ -182,6 +185,9 @@ export default function JamApp() {
   const [isImporting, setIsImporting] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
+  const [magicEmail, setMagicEmail] = useState("")
+  const [authEmail, setAuthEmail] = useState<string | null>(null)
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -211,6 +217,22 @@ export default function JamApp() {
     }
   }, [])
 
+  // Auth: load current user and subscribe to changes
+  useEffect(() => {
+    let unsub: (() => void) | null = null
+    ;(async () => {
+      const u = await getCurrentUser()
+      setAuthUserId(u?.id ?? null)
+      setAuthEmail(u?.email ?? null)
+      const { data: { subscription } } = onAuthChange((next) => {
+        setAuthUserId(next?.id ?? null)
+        setAuthEmail(next?.email ?? null)
+      })
+      unsub = () => subscription.unsubscribe()
+    })()
+    return () => { unsub?.() }
+  }, [])
+
   // persist name after mount only (useEffect runs client-side)
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -228,7 +250,7 @@ export default function JamApp() {
     let unsubVotes: (() => void) | null = null
     let alive = true
 
-    setIsSavingSession(true)
+    setIsSavingSession(true) // spinner when webpage initially loads. could delete this
 
     ;(async () => {
       try {
@@ -288,6 +310,13 @@ export default function JamApp() {
     }
   }, [session, userId])
 
+  // After you compute/set the local anon id:
+  useEffect(() => {
+    if (authUserId) {
+      setUserId(authUserId)         // use real auth id when signed in
+    }
+  }, [authUserId])
+
   // update suggestions as user types to add an album (from current albums only)
   useEffect(() => {
     const { titles, artists } = buildCandidates(albums)
@@ -307,6 +336,14 @@ export default function JamApp() {
     window.history.replaceState(null, "", url.toString())
     setSessionInput(session)
   }, [session])
+
+  useEffect(() => {
+    if (!sessionId) return
+    const anonId = localStorage.getItem("the-jam-session/userId") || ""
+    if (authUserId && anonId && authUserId !== anonId) {
+      migrateVotesFromAnonToAuth(sessionId, anonId, authUserId).catch(() => {})
+    }
+  }, [sessionId, authUserId])
 
   async function addAlbum() {
     if (!sessionId) { alert("Session not ready yet."); return }
@@ -610,6 +647,60 @@ export default function JamApp() {
           </div>
           {/* Header buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Account control */}
+            {authUserId ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="border gap-2">
+                    <Avatar className="h-6 w-6">
+                      <AvatarImage src={/* profile?.avatar_url ?? "" */ ""} />
+                      <AvatarFallback className="text-xs">
+                        {/* Simple initials from display name or email */}
+                        {(() => {
+                          const source = (userName && userName.trim()) || (authEmail?.split("@")[0] ?? "You")
+                          const parts = source.split(/[.\s\-_]+/).filter(Boolean)
+                          const initials = (parts[0]?.[0] ?? "Y") + (parts[1]?.[0] ?? "")
+                          return initials.toUpperCase()
+                        })()}
+                      </AvatarFallback>
+                    </Avatar>
+                    Account
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="bg-white">
+                  <DropdownMenuLabel>Signed in</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={signOut}>Sign out</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="border">Log in</Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="bg-white">
+                  <DropdownMenuLabel>Sign in</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={signInWithGoogle}>Sign in with Google</DropdownMenuItem>
+                  <div className="px-3 py-2 space-y-2">
+                    <div className="text-xs text-muted-foreground">Or get a magic link</div>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="you@example.com"
+                        value={magicEmail}
+                        onChange={(e) => setMagicEmail(e.target.value)}
+                        className="h-8"
+                      />
+                      <Button
+                        variant="outline"
+                        className="h-8"
+                        onClick={() => magicEmail && sendMagicLink(magicEmail)}
+                      >
+                        Send
+                      </Button>
+                    </div>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {/* Session input field */}
             <Input
               value={sessionInput}
@@ -629,7 +720,14 @@ export default function JamApp() {
               Save
             </Button>
             {/* Share button and dialog box */}
-            <Dialog open={shareOpen} onOpenChange={setShareOpen}>
+            <Dialog
+            // reset 'Copied!' when closing Share dialog box
+              open={shareOpen}
+              onOpenChange={(open) => {
+                setShareOpen(open)
+                if (!open) setShareCopied(false)
+              }}
+              >
               <DialogTrigger asChild>
                 <Button variant="ghost" className="border" title="Copy share link">
                   <LinkIcon className="mr-2 h-4 w-4" />
@@ -650,6 +748,7 @@ export default function JamApp() {
                     variant="ghost"
                     className="border"
                     onClick={copyShareLink}
+                    disabled={!sessionId || !session.trim()}
                   >
                     {shareCopied ? "Copied to clipboard!" : "Copy to clipboard"}
                   </Button>
