@@ -19,3 +19,15 @@ export async function ensureSession(code: string) {
   if (insertErr) throw insertErr
   return inserted.id
 }
+
+export async function fetchLatestSessionForUser(userId: string) {
+  const { data, error } = await supabase
+    .from("sessions")
+    .select("id,name,created_at")
+    .eq("owner_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { id: data.id, name: data.name as string };
+}

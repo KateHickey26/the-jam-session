@@ -9,18 +9,17 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogClose, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Dice5, Download, LinkIcon, Plus, Trash2, Upload } from "lucide-react"
-import { ensureSession } from "@/lib/session"
+import { ensureSession, fetchLatestSessionForUser } from "@/lib/session"
 import { Loader2 } from "lucide-react"
 import {
   fetchAlbums,
   subscribeAlbums,
   addAlbumRow,
-  deleteAlbumRow,
   fetchPantry,
   archiveAlbumRow,
   restoreAlbumRow,
@@ -85,10 +84,6 @@ function download(filename: string, text: string) {
   a.download = filename
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 3000)
-}
-
-function copyToClipboard(text: string) {
-  navigator.clipboard?.writeText(text).catch(() => {})
 }
 
 function norm(s: string) {
@@ -317,6 +312,23 @@ export default function JamApp() {
     }
   }, [authUserId])
 
+  useEffect(() => {
+    if (!authUserId) return;
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get("session");
+    if (fromUrl) return; // respect explicit URL
+  
+    (async () => {
+      const latest = await fetchLatestSessionForUser(authUserId);
+      if (latest?.name) {
+        setSession(latest.name);
+        const url = new URL(window.location.href);
+        url.searchParams.set("session", latest.name);
+        window.history.replaceState(null, "", url.toString());
+      }
+    })();
+  }, [authUserId]);
+
   // update suggestions as user types to add an album (from current albums only)
   useEffect(() => {
     const { titles, artists } = buildCandidates(albums)
@@ -389,27 +401,7 @@ export default function JamApp() {
     }
   }
 
-  async function removeAlbum(id: string) {
-    // Optimistic remove so the card disappears instantly
-    setAlbums(prev => prev.filter(a => a.id !== id))
-    try {
-      await deleteAlbumRow(id)
-      // Fallback refresh in case other clients changed the list concurrently
-      if (sessionId) {
-        const rows = await fetchAlbums(sessionId)
-        setAlbums(rows.map(dbToAlbum))
-      }
-    } catch (err) {
-      console.error(err)
-      alert("Could not remove album. Please try again.")
-      // Rollback if the delete failed
-      if (sessionId) {
-        const rows = await fetchAlbums(sessionId)
-        setAlbums(rows.map(dbToAlbum))
-      }
-    }
-  }
-
+  // clear all my votes - not used right now, but keep for now
   async function clearMyVotes() {
     if (!sessionId) return
     try {
@@ -469,7 +461,13 @@ export default function JamApp() {
     }
     const url = shareUrl();
     try {
-      await navigator.clipboard.writeText(url);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // fallback if clipboard unavailable
+        const ok = window.prompt("Copy this link:", url);
+        if (ok === null) return;
+      }
       setShareCopied(true);
       // auto-close after a moment (optional)
       setTimeout(() => {
@@ -525,19 +523,6 @@ export default function JamApp() {
 
   function exportJson() {
     download(`${session}-albums.json`, JSON.stringify({ session, albums }, null, 2))
-  }
-
-  function importJson(text: string) {
-    // NOTE: this now only changes local UI state; the source of truth is Supabase.
-    // We can wire this to bulk-insert later if you want.
-    try {
-      const parsed = JSON.parse(text)
-      if (Array.isArray(parsed.albums)) {
-        setAlbums(parsed.albums as Album[])
-      }
-    } catch {
-      // ignore for MVP
-    }
   }
 
   function shareUrl() {
@@ -1119,7 +1104,7 @@ export default function JamApp() {
                           <div className="flex gap-4 p-4">
                             <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl bg-zinc-100">
                               {a.cover ? (
-                                <img src={a.cover} alt={`${a.title} cover`} className="h-full w-full object-cover" />
+                                <img src={a.cover} alt={`${a.title} cover`} className="h-full w-full object-cover" loading="lazy" />
                               ) : (
                                 <div className="flex h-full w-full items-center justify-center text-xs text-zinc-400">No cover</div>
                               )}
