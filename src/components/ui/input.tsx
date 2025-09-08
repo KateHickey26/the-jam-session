@@ -1,21 +1,80 @@
-import * as React from "react"
+"use client";
 
-import { cn } from "@/lib/utils"
+import * as React from "react";
+import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+type Props = React.InputHTMLAttributes<HTMLInputElement> & {
+  /** Show a clear (×) button when there is a value. Defaults to true. */
+  clearable?: boolean;
+};
+
+const Input = React.forwardRef<HTMLInputElement, Props>(function Input(
+  { className, type = "text", clearable = true, onChange, value, defaultValue, ...props },
+  ref
+) {
+  const innerRef = React.useRef<HTMLInputElement>(null);
+
+  // merge refs
+  React.useImperativeHandle(ref, () => innerRef.current as HTMLInputElement);
+
+  const isControlled = value !== undefined;
+  const hasValue =
+    (isControlled && String(value ?? "").length > 0) ||
+    (!isControlled && String(defaultValue ?? innerRef.current?.value ?? "").length > 0);
+
+    function handleClear() {
+      const el = innerRef.current;
+      if (!el) return;
+    
+      // Use the native setter so React sees the change
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+    
+      setter?.call(el, ""); // set value to empty
+    
+      // Dispatch a real input event so React onChange fires with target.value === ""
+      const ev = new Event("input", { bubbles: true });
+      el.dispatchEvent(ev);
+    
+      // Keep focus after clearing
+      el.focus();
+    }
+
   return (
-    <input
-      type={type}
-      data-slot="input"
-      className={cn(
-        "file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
-        "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-        "aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
-        className
-      )}
-      {...props}
-    />
-  )
-}
+    <div className="relative">
+      <input
+        ref={innerRef}
+        type={type}
+        value={value}
+        defaultValue={defaultValue}
+        onChange={onChange}
+        className={cn(
+          "flex h-9 w-full rounded-md border bg-background px-3 text-sm outline-hidden",
+          // leave space for the clear button when visible
+          clearable && hasValue ? "pr-8" : "pr-3",
+          "placeholder:text-muted-foreground",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          className
+        )}
+        {...props}
+      />
 
-export { Input }
+      {clearable && hasValue && (
+        <button
+          type="button"
+          aria-label="Clear"
+          onClick={handleClear}
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-muted-foreground hover:bg-accent"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+    </div>
+  );
+});
+
+Input.displayName = "Input";
+export { Input };

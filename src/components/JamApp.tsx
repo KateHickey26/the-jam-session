@@ -40,7 +40,7 @@ import { getCurrentUser, onAuthChange, signInWithGoogle, sendMagicLink, signOut 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { fetchUserSessions, ensureSession, fetchLatestSessionForUser, type DBSlimSession } from "@/lib/session" 
 import SessionDDL from "@/components/SessionDDL"
-
+import { MoreHorizontal } from "lucide-react"
 
 // ---- Types ----
 export type Album = {
@@ -191,6 +191,8 @@ export default function JamApp() {
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const [newSessionError, setNewSessionError] = useState<string | null>(null)
   const sessionListId = "jam-session-list"
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -727,29 +729,55 @@ const sessionOptions = React.useMemo(() => {
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
       <div className="mx-auto max-w-6xl">
-        <motion.header initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-          {/* Logo */}
-          <div>
-            <Image 
-              src="/jam-session-logo-sbs-transparent.png" 
-              alt="The Jam Session logo" 
-              width={320}
-              height={80}
-              priority
-            />
-            <p className="text-sm text-muted-foreground">Vote on your Jams, then let chance decide from the top picks.</p>
-          </div>
-          {/* Header buttons */}
-          <div className="flex flex-wrap items-center gap-2">
+      <motion.header
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between"
+      >
+        {/* Logo */}
+        <div>
+          <Image 
+            src="/jam-session-logo-sbs-transparent.png" 
+            alt="The Jam Session logo" 
+            width={320}
+            height={80}
+            priority
+          />
+          <p className="text-sm text-muted-foreground">
+            Vote on your Jams, then let chance decide from the top picks.
+          </p>
+        </div>
+
+        {/* Header buttons, stacked into two rows */}
+        <div className="flex flex-col gap-2 items-start md:items-end">
+
+          {/* Top line: Menu + Account */}
+          <div className="flex gap-2">
+            {/* Menu (⋯) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="border" title="More">
+                  <MoreHorizontal className="mr-2 h-4 w-4" />
+                  Menu
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-white">
+                <DropdownMenuItem onSelect={() => setImportOpen(true)}>
+                  Import albums (JSON)
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setExportOpen(true)}>
+                  Export albums (JSON)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {/* Account control */}
             {authUserId ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="border gap-2">
                     <Avatar className="h-6 w-6">
-                      <AvatarImage src={/* profile?.avatar_url ?? "" */ ""} />
+                      <AvatarImage src="" />
                       <AvatarFallback className="text-xs">
-                        {/* Simple initials from display name or email */}
                         {(() => {
                           const source = (userName && userName.trim()) || (authEmail?.split("@")[0] ?? "You")
                           const parts = source.split(/[.\s\-_]+/).filter(Boolean)
@@ -762,7 +790,7 @@ const sessionOptions = React.useMemo(() => {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="bg-white">
-                  <DropdownMenuLabel>Hello, you are logged in!</DropdownMenuLabel>
+                  <DropdownMenuLabel>Hello{ userName}, you are logged in!</DropdownMenuLabel>
                   <DropdownMenuItem onClick={signOut}>Sign out</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -774,29 +802,15 @@ const sessionOptions = React.useMemo(() => {
                 <DropdownMenuContent align="end" className="bg-white">
                   <DropdownMenuLabel>Sign in</DropdownMenuLabel>
                   <DropdownMenuItem onClick={signInWithGoogle}>Sign in with Google</DropdownMenuItem>
-                  <div className="px-3 py-2 space-y-2">
-                    <div className="text-xs text-muted-foreground">Or get a magic link</div>
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="you@example.com"
-                        value={magicEmail}
-                        onChange={(e) => setMagicEmail(e.target.value)}
-                        className="h-8"
-                      />
-                      <Button
-                        variant="outline"
-                        className="h-8"
-                        onClick={() => magicEmail && sendMagicLink(magicEmail)}
-                      >
-                        Send
-                      </Button>
-                    </div>
-                  </div>
+                  {/* magic link form here */}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {/* Session input */}
-            <SessionDDL
+          </div>
+
+          {/* Second line: Session DDL + New Session + Share */}
+          <div className="flex gap-2">
+          <SessionDDL
               className="w-44"
               value={session ?? ""}
               onChange={(next) => setSession(next)}     // switch immediately
@@ -804,19 +818,18 @@ const sessionOptions = React.useMemo(() => {
               loading={isSavingSession}                 // shows spinner while loading
               disabled={false}
             />
-            {/* New session button + dialog */}
+            {/* New session dialog button */}
             <Dialog open={newSessionOpen} onOpenChange={setNewSessionOpen}>
               <DialogTrigger asChild>
                 <Button variant="ghost" className="border">New session</Button>
               </DialogTrigger>
               <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Create a new session</DialogTitle>
-                </DialogHeader>
-
+              <DialogHeader>
+                <DialogTitle>Create a new session</DialogTitle>
+              </DialogHeader>
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                  Name your new session. It will be created and switched to straight away.
+                    Name your session. This will create it and switch you straight to it.
                   </p>
 
                   <Input
@@ -848,15 +861,11 @@ const sessionOptions = React.useMemo(() => {
                 </div>
               </DialogContent>
             </Dialog>
-            {/* Share button and dialog box */}
-            <Dialog
-            // reset 'Copied!' when closing Share dialog box
-              open={shareOpen}
-              onOpenChange={(open) => {
-                setShareOpen(open)
-                if (!open) setShareCopied(false)
-              }}
-              >
+            {/* Share dialog button */}
+            <Dialog open={shareOpen} onOpenChange={(open) => {
+              setShareOpen(open)
+              if (!open) setShareCopied(false)
+            }}>
               <DialogTrigger asChild>
                 <Button variant="ghost" className="border" title="Copy share link">
                   <LinkIcon className="mr-2 h-4 w-4" />
@@ -864,104 +873,96 @@ const sessionOptions = React.useMemo(() => {
                 </Button>
               </DialogTrigger>
               <DialogContent className="bg-white text-zinc-900 backdrop-blur-sm sm:max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Share session</DialogTitle>
-                </DialogHeader>
+              <DialogHeader>
+                <DialogTitle>Share session</DialogTitle>
+              </DialogHeader>
 
-                <p className="text-sm text-muted-foreground">
-                  Copy a link to invite someone to this session.
-                </p>
+              <p className="text-sm text-muted-foreground">
+                Copy a link to invite someone to this session.
+              </p>
 
-                <div className="mt-3 flex gap-2">
-                  <Button
-                    variant="ghost"
-                    className="border"
-                    onClick={copyShareLink}
-                    disabled={!sessionId || !session.trim()}
-                  >
-                    {shareCopied ? "Copied to clipboard!" : "Copy to clipboard"}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="border"
-                    onClick={() => setShareOpen(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-            {/* Import JSON button and dialog box */}
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button variant="ghost" className="border"><Upload className="mr-2 h-4 w-4" />Import</Button>
-              </DialogTrigger>
-              <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Import albums (JSON)</DialogTitle>
-                </DialogHeader>
-
-                <p className="text-sm text-muted-foreground">
-                  Paste either an array of albums or an export object.
-                  Examples:
-                  <br />• <code>[{"{ \"title\":\"Blue\",\"artist\":\"Joni Mitchell\",\"cover\":\"...\" }"}]</code>
-                  <br />• <code>{"{ \"session\":\"Week 1\", \"albums\":[ ... ] }"}</code>
-                </p>
-
-                <Textarea
-                  placeholder="Paste JSON here"
-                  className="min-h-[200px] bg-zinc-100 border border-zinc-300 focus-visible:ring-jam-blueberry/50"
-                  value={importText}
-                  onChange={(e) => setImportText(e.target.value)}
-                />
-
-                <div className="flex justify-end gap-2">
-                  <DialogClose asChild>
-                    <Button variant="ghost" className="border">Cancel</Button>
-                  </DialogClose>
-                  <Button
-                    onClick={runImport}
-                    disabled={!sessionId || !importText.trim() || isImporting}
-                    variant="ghost"
-                    className="border"
-                  >
-                    {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Import to session
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-            {/* Export button and dialog box  */}
-            <Dialog>
-              <DialogTrigger asChild>
-                <Button variant="ghost" className="border">
-                  <Download className="mr-2 h-4 w-4" />
-                  Export
+              <div className="mt-3 flex gap-2">
+                <Button
+                  variant="ghost"
+                  className="border"
+                  onClick={copyShareLink}
+                  disabled={!sessionId || !session.trim()}
+                >
+                  {shareCopied ? "Copied to clipboard!" : "Copy to clipboard"}
                 </Button>
-              </DialogTrigger>
-
-              <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Export albums</DialogTitle>
-                </DialogHeader>
-
-                <p className="text-sm text-muted-foreground">
-                  Do you want to download a JSON file of all albums in this session
-                  <span className="font-medium"> “{session}”</span>?
-                </p>
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <DialogClose asChild>
-                    <Button variant="ghost" className="border">Cancel</Button>
-                  </DialogClose>
-
-                  <DialogClose asChild>
-                    <Button variant="ghost" className="border" onClick={exportJson}>Download JSON</Button>
-                  </DialogClose>
-                </div>
-              </DialogContent>
+                <DialogClose asChild>
+                  <Button variant="ghost" className="border">
+                    Close
+                  </Button>
+                </DialogClose>
+              </div>
+            </DialogContent>
             </Dialog>
           </div>
+        </div>
+
+        {/* Import dialog */}
+        <Dialog open={importOpen} onOpenChange={setImportOpen}>
+                <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Import albums (JSON)</DialogTitle>
+                  </DialogHeader>
+
+                  <p className="text-sm text-muted-foreground">
+                    Paste either an array of albums or an export object.
+                    Examples:
+                    <br />• <code>[{"{ \"title\":\"Blue\",\"artist\":\"Joni Mitchell\",\"cover\":\"...\" }"}]</code>
+                    <br />• <code>{"{ \"session\":\"Week 1\", \"albums\":[ ... ] }"}</code>
+                  </p>
+
+                  <Textarea
+                    placeholder="Paste JSON here"
+                    className="min-h-[200px] bg-zinc-100 border border-zinc-300 focus-visible:ring-jam-blueberry/50"
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                  />
+
+                  <div className="flex justify-end gap-2">
+                    <DialogClose asChild>
+                      <Button variant="ghost" className="border">Cancel</Button>
+                    </DialogClose>
+                    <Button
+                      onClick={runImport}
+                      disabled={!sessionId || !importText.trim() || isImporting}
+                      variant="ghost"
+                      className="border"
+                    >
+                      {isImporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Import to session
+                    </Button>
+                  </div>
+                </DialogContent>
+        </Dialog>
+        {/* Export dialog */}
+        <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+                <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Export albums</DialogTitle>
+                  </DialogHeader>
+
+                  <p className="text-sm text-muted-foreground">
+                    Download a JSON file of all albums in
+                    <span className="font-medium"> “{session}”</span>?
+                  </p>
+
+                  <div className="mt-4 flex justify-end gap-2">
+                    <DialogClose asChild>
+                      <Button variant="ghost" className="border">Cancel</Button>
+                    </DialogClose>
+                    <DialogClose asChild>
+                      <Button variant="ghost" className="border" onClick={exportJson}>
+                        Download JSON
+                      </Button>
+                    </DialogClose>
+                  </div>
+                </DialogContent>
+        </Dialog>
+
         </motion.header>
         {/* Top Cards */}
         <div className="mb-6 grid gap-4 md:grid-cols-[1.2fr_1fr]">
