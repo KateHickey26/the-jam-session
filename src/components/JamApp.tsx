@@ -14,7 +14,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Dice5, Download, LinkIcon, Plus, Trash2, Upload } from "lucide-react"
-import { ensureSession, fetchLatestSessionForUser } from "@/lib/session"
 import { Loader2 } from "lucide-react"
 import {
   fetchAlbums,
@@ -39,6 +38,9 @@ import {
 } from "@/lib/supabase"
 import { getCurrentUser, onAuthChange, signInWithGoogle, sendMagicLink, signOut } from "@/lib/auth"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { fetchUserSessions, ensureSession, fetchLatestSessionForUser, type DBSlimSession } from "@/lib/session" 
+import SessionDDL from "@/components/SessionDDL"
+
 
 // ---- Types ----
 export type Album = {
@@ -183,6 +185,12 @@ export default function JamApp() {
   const [authUserId, setAuthUserId] = useState<string | null>(null)
   const [magicEmail, setMagicEmail] = useState("")
   const [authEmail, setAuthEmail] = useState<string | null>(null)
+  const [mySessions, setMySessions] = useState<DBSlimSession[]>([])
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [newSessionName, setNewSessionName] = useState("")
+  const [isCreatingSession, setIsCreatingSession] = useState(false)
+  const [newSessionError, setNewSessionError] = useState<string | null>(null)
+  const sessionListId = "jam-session-list"
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -290,8 +298,13 @@ export default function JamApp() {
           setStats(st2)
         })
       } catch (e) {
-        console.error(e)
-        alert("Failed to load this session.")
+        const msg = e instanceof Error ? e.message : String(e)
+        if (/sign in to create/i.test(msg)) {
+          console.warn(msg)   // silently log when anon users try to create
+        } else {
+          console.error(e)
+          alert("Failed to load this session.")
+        }
       } finally {
         if (alive) setIsSavingSession(false)
       }
@@ -356,6 +369,19 @@ export default function JamApp() {
       migrateVotesFromAnonToAuth(sessionId, anonId, authUserId).catch(() => {})
     }
   }, [sessionId, authUserId])
+
+  useEffect(() => {
+    if (!authUserId) { setMySessions([]); return }
+    ;(async () => {
+      try {
+        const rows = await fetchUserSessions()
+        console.log("mySessions:", rows)  // remove later
+        setMySessions(rows)
+      } catch (e) {
+        console.error("Could not load your sessions", e)
+      }
+    })()
+  }, [authUserId])
 
   async function addAlbum() {
     if (!sessionId) { alert("Session not ready yet."); return }
@@ -616,10 +642,93 @@ export default function JamApp() {
     }
   }
 
+  // async function createNewSession() {
+  //   const name = newSessionName.trim()
+  //   if (mySessions.some(s => s.name.toLowerCase() === name.toLowerCase())) {
+  //     setNewSessionError("You already have a session with that name.")
+  //     return
+  //   }
+  //   setNewSessionError(null)
+  //   if (!name) return setNewSessionError("Please enter a session name.")
+  
+  //   try {
+  //     setIsCreatingSession(true)
+  //     await ensureSession(name) // idempotent create
+  
+  //     // ✅ refresh list so every field matches DBSlimSession
+  //     const rows = await fetchUserSessions()
+  //     setMySessions(rows)
+  
+  //     // Pre-fill input but do not switch yet
+  //     setSessionInput(name)
+  //     setNewSessionOpen(false)
+  //     setNewSessionName("")
+  //   } catch (e) {
+  //     console.error(e)
+  //     setNewSessionError("Could not create the session. Try a different name.")
+  //   } finally {
+  //     setIsCreatingSession(false)
+  //   }
+  // }
+
+  async function createNewSession() {
+    const name = newSessionName.trim();
+    if (!name) {
+      setNewSessionError("Please enter a session name.");
+      return;
+    }
+    if (mySessions.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      setNewSessionError("You already have a session with that name.");
+      return;
+    }
+  
+    try {
+      setIsCreatingSession(true);
+      setNewSessionError(null);
+  
+      // Creates if missing, throws if unauthenticated (RLS)
+      const id = await ensureSession(name);
+  
+      // Immediately switch to this session
+      setSession(name);
+      setSessionInput(name);
+      setSessionId(id);
+  
+      // Add it into the dropdown if new
+      setMySessions((prev) => {
+        if (prev.some((s) => s.name === name)) return prev;
+        const newSession: DBSlimSession = {
+          id,
+          name,
+          created_at: new Date().toISOString(),
+        };
+        return [newSession, ...prev];
+      });
+  
+      // Reset and close dialog
+      setNewSessionOpen(false);
+      setNewSessionName("");
+    } catch (e) {
+      console.error(e);
+      setNewSessionError(
+        e instanceof Error ? e.message : "Could not create the session."
+      );
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }
+
+const sessionOptions = React.useMemo(() => {
+  const base = (mySessions ?? []).map(s => s.name).filter(Boolean);
+  if (session && !base.includes(session)) base.unshift(session); // show current value too
+  return Array.from(new Set(base)).sort((a, b) => a.localeCompare(b));
+}, [mySessions, session]);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-emerald-50 p-4 md:p-10">
       <div className="mx-auto max-w-6xl">
         <motion.header initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          {/* Logo */}
           <div>
             <Image 
               src="/jam-session-logo-sbs-transparent.png" 
@@ -653,7 +762,7 @@ export default function JamApp() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="bg-white">
-                  <DropdownMenuLabel>Signed in</DropdownMenuLabel>
+                  <DropdownMenuLabel>Hello, you are logged in!</DropdownMenuLabel>
                   <DropdownMenuItem onClick={signOut}>Sign out</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -686,24 +795,59 @@ export default function JamApp() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {/* Session input field */}
-            <Input
-              value={sessionInput}
-              onChange={(e) => setSessionInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") saveSession() }}
-              placeholder="Session name"
+            {/* Session input */}
+            <SessionDDL
               className="w-44"
+              value={session ?? ""}
+              onChange={(next) => setSession(next)}     // switch immediately
+              options={sessionOptions}
+              loading={isSavingSession}                 // shows spinner while loading
+              disabled={false}
             />
-            {/* Save session button */}
-            <Button
-              onClick={saveSession}
-              variant="ghost"
-              className="border"
-              disabled={isSavingSession || !sessionInput.trim() || sessionInput.trim() === session}
-            >
-              {isSavingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Save
-            </Button>
+            {/* New session button + dialog */}
+            <Dialog open={newSessionOpen} onOpenChange={setNewSessionOpen}>
+              <DialogTrigger asChild>
+                <Button variant="ghost" className="border">New session</Button>
+              </DialogTrigger>
+              <DialogContent className="bg-white text-zinc-900 shadow-xl rounded-xl p-6 sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Create a new session</DialogTitle>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                  Name your new session. It will be created and switched to straight away.
+                  </p>
+
+                  <Input
+                    autoFocus
+                    placeholder="e.g. Jam 3 — Sept 2025"
+                    value={newSessionName}
+                    onChange={(e) => setNewSessionName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") createNewSession() }}
+                  />
+
+                  {newSessionError ? (
+                    <p className="text-sm text-red-600">{newSessionError}</p>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <DialogClose asChild>
+                    <Button variant="ghost" className="border">Cancel</Button>
+                  </DialogClose>
+                  <Button
+                    onClick={createNewSession}
+                    disabled={isCreatingSession || !newSessionName.trim()}
+                    variant="ghost"
+                    className="border"
+                  >
+                    {isCreatingSession ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Create
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
             {/* Share button and dialog box */}
             <Dialog
             // reset 'Copied!' when closing Share dialog box
