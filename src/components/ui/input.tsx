@@ -23,25 +23,26 @@ const Input = React.forwardRef<HTMLInputElement, Props>(function Input(
     (isControlled && String(value ?? "").length > 0) ||
     (!isControlled && String(defaultValue ?? innerRef.current?.value ?? "").length > 0);
 
-    function handleClear() {
-      const el = innerRef.current;
-      if (!el) return;
-    
-      // Use the native setter so React sees the change
-      const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        "value"
-      )?.set;
-    
-      setter?.call(el, ""); // set value to empty
-    
-      // Dispatch a real input event so React onChange fires with target.value === ""
-      const ev = new Event("input", { bubbles: true });
-      el.dispatchEvent(ev);
-    
-      // Keep focus after clearing
-      el.focus();
+  function handleClear() {
+    const el = innerRef.current;
+    if (!el) return;
+
+    // Make the underlying input empty so the event carries ""
+    el.value = "";
+
+    if (isControlled) {
+      // Notify parent with an empty value
+      onChange?.({
+        target: el,
+        currentTarget: el,
+      } as React.ChangeEvent<HTMLInputElement>);
+    } else {
+      // Uncontrolled: fire a real input event so React listeners run
+      el.dispatchEvent(new Event("input", { bubbles: true }));
     }
+
+    el.focus();
+  }
 
   return (
     <div className="relative">
@@ -66,8 +67,9 @@ const Input = React.forwardRef<HTMLInputElement, Props>(function Input(
         <button
           type="button"
           aria-label="Clear"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={handleClear}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-muted-foreground hover:bg-accent"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-muted-foreground hover:bg-accent/10"
         >
           <X className="h-4 w-4" />
         </button>

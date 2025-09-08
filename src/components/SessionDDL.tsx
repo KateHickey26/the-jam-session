@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 type Props = {
@@ -55,22 +55,22 @@ export default function SessionDDL({
     openMenu();
   }
   function handleBlur() {
+    // allow option click before closing
     requestAnimationFrame(closeMenu);
   }
-
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Escape") {
       e.preventDefault();
       closeMenu();
     }
   }
-
   function pick(opt: string) {
     onChange(opt);
     setQuery(opt);
     closeMenu();
   }
 
+  // click-outside to close
   React.useEffect(() => {
     if (!open) return;
     function handleDocMouseDown(e: MouseEvent) {
@@ -89,35 +89,47 @@ export default function SessionDDL({
         ref={inputRef}
         value={display}
         placeholder={placeholder}
-        clearable={open && editing}
+        clearable={false}               // ⛔️ hide built-in clear button
         onFocus={handleFocus}
         onBlur={handleBlur}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
         autoComplete="off"
         disabled={disabled}
-        // open/close when the field is clicked (without selecting text)
+        // toggle menu on click (prevent text selection)
         onMouseDown={(e) => {
           if (!open) e.preventDefault();
           open ? closeMenu() : openMenu();
         }}
-        className={cn(
-          // leave a bit more room on the right for both the ✕ and chevron
-          "pr-12"
-        )}
+        className="pr-12"              // room for ✕ and chevron
       />
 
-      {/* Right-side adornment: spinner or chevron; offset so it doesn't overlap the ✕ */}
-      <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center">
+      {/* Right adornments: ✕ then chevron */}
+      <div className="absolute inset-y-0 right-2 flex items-center gap-2">
+        {/* Custom clear button: only while searching */}
+        {open && editing && query && (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onMouseDown={(e) => e.preventDefault()} // keep focus, don't close
+            onClick={() => {
+              setQuery("");
+              inputRef.current?.focus();
+            }}
+            className="rounded-md p-0.5 text-muted-foreground hover:bg-accent/10"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Chevron (visual indicator) */}
         {loading ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : (
           <ChevronDown
             className={cn(
               "h-4 w-4 text-muted-foreground transition-transform",
-              open && "rotate-180",
-              // push it left a bit to avoid the clear button which sits at right-2
-              "mr-4"
+              open && "rotate-180"
             )}
           />
         )}
@@ -139,7 +151,7 @@ export default function SessionDDL({
                   e.preventDefault(); // pick before blur
                   pick(opt);
                 }}
-                className="cursor-pointer px-3 py-2 text-sm hover:bg-accent"
+                className="cursor-pointer px-3 py-2 text-sm hover:bg-accent/10"
               >
                 {opt}
               </div>

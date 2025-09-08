@@ -41,6 +41,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { fetchUserSessions, ensureSession, fetchLatestSessionForUser, type DBSlimSession } from "@/lib/session" 
 import SessionDDL from "@/components/SessionDDL"
 import { MoreHorizontal } from "lucide-react"
+import { cn } from "@/lib/utils";
 
 // ---- Types ----
 export type Album = {
@@ -1048,7 +1049,7 @@ const sessionOptions = React.useMemo(() => {
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between">
                 <span>This week’s pick</span>
-                <Button size="sm" variant="outline" onClick={pickByRules}>
+                <Button size="sm" variant="ghost" className="border" onClick={pickByRules}>
                   <Dice5 className="mr-2 h-4 w-4" /> Pick now
                 </Button>
               </CardTitle>
@@ -1168,8 +1169,16 @@ const sessionOptions = React.useMemo(() => {
                               key={p.value}
                               type="button"
                               disabled={!userId} // Don’t allow voting until we’ve hydrated the anonymous user id
-                              variant={my === p.value ? "default" : "outline"}
-                              className={`w-full border ${my === p.value ? "" : "bg-white"}`}
+                              variant="ghost"
+                              // variant={my === p.value ? "default" : "outline"}
+                              className={cn(
+                                "w-full border",
+                                my === p.value
+                                  // Selected: keep the same color on hover/active/focus
+                                  ? "bg-accent/20 hover:!bg-accent/20 active:!bg-accent/20 hover:!text-inherit focus-visible:!ring-0"
+                                  // Not selected: subtle hover
+                                  : "bg-white hover:bg-accent/10"
+                              )}
                               // preference buttons disabled until userId is ready
                               onClick={async () => {
                                 // If userId hasn't been set yet, show a friendly message and bail.
