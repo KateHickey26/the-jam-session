@@ -763,10 +763,16 @@ const sessionOptions = React.useMemo(() => {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="bg-white">
-                <DropdownMenuItem onSelect={() => setImportOpen(true)}>
+                <DropdownMenuItem 
+                  onSelect={() => setImportOpen(true)}
+                  className="hover:bg-accent/10 focus:bg-accent/10 text-zinc-900"
+                >
                   Import albums (JSON)
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setExportOpen(true)}>
+                <DropdownMenuItem 
+                  onSelect={() => setExportOpen(true)}
+                  className="hover:bg-accent/10 focus:bg-accent/10 text-zinc-900"
+                >
                   Export albums (JSON)
                 </DropdownMenuItem>
               </DropdownMenuContent>

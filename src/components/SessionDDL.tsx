@@ -89,7 +89,7 @@ export default function SessionDDL({
         ref={inputRef}
         value={display}
         placeholder={placeholder}
-        clearable={false}               // ⛔️ hide built-in clear button
+        clearable={false}               // hide built-in clear button
         onFocus={handleFocus}
         onBlur={handleBlur}
         onChange={(e) => setQuery(e.target.value)}
@@ -101,7 +101,7 @@ export default function SessionDDL({
           if (!open) e.preventDefault();
           open ? closeMenu() : openMenu();
         }}
-        className="pr-12"              // room for ✕ and chevron
+        className="pr-16"              // room for ✕ and chevron
       />
 
       {/* Right adornments: ✕ then chevron */}
@@ -122,16 +122,26 @@ export default function SessionDDL({
           </button>
         )}
 
-        {/* Chevron (visual indicator) */}
+        {/* Chevron — now clickable */}
         {loading ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : (
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform",
-              open && "rotate-180"
-            )}
-          />
+          <button
+            type="button"
+            aria-label={open ? "Close sessions menu" : "Open sessions menu"}
+            onMouseDown={(e) => {
+              e.preventDefault(); // avoid input blur
+              open ? closeMenu() : openMenu();
+            }}
+            className="p-1"
+          >
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform",
+                open && "rotate-180"
+              )}
+            />
+          </button>
         )}
       </div>
 
