@@ -33,11 +33,5 @@ NextJS, TypeScript, CSS, HTML, Supabase (database), SQL, Vercel (deployment)
 	•	Return a compact list: {title, artist, cover}; show as a dropdown under the inputs; selecting one fills the fields.
 	•	Benefits: canonical names/artwork + avoids typos.
 - Colour co-ordinate the albums for the number you've picked
-- Email log in
 - Submit your votes and then get emailed the pick when everyone's voted
-- In Vercel → Project → Settings → Environment Variables
-    Add the same two keys:
-	•	NEXT_PUBLIC_SUPABASE_URL
-	•	NEXT_PUBLIC_SUPABASE_ANON_KEY
-	•	Redeploy. (Locally you’re already using .env.local.)
-- Add aI emails with info about the album or band of the fortnight
+- Add AI emails with info about the album or band of the fortnight
