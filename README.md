@@ -21,6 +21,7 @@ NextJS, TypeScript, CSS, HTML, Supabase (database), SQL, Vercel (deployment)
 	•	Disqualify if any user voted 3 (“not this week”).
 	•	Weight 1-votes double; 2-votes single. (Album “tickets” = 2 × #1s + 1 × #2s.)
 	•	If every album has at least one 3, fall back to a pure random pick among all albums.
+	
 	Edge cases:
 	•	Albums with no votes and no 3s: give them a tiny chance (e.g. weight 1) so brand-new items aren’t impossible to draw.
 	•	If no albums at all, do nothing.
